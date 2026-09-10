@@ -421,6 +421,7 @@ export default function AiAdventureGame({
       } else {
         setActiveSessionId(null);
         setIsCreating(true);
+        setShowSidebar(false);
       }
     }
     setSessionToDeleteId(null);
@@ -1480,7 +1481,7 @@ ${currentSession.outline}
       {/* 2.1 CREATING NEW GAME MODAL */}
       <AnimatePresence>
         {isCreating && (
-          <div className="absolute inset-0 z-40 flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-4">
             {/* Backdrop */}
             <motion.div
               initial={{ opacity: 0 }}
@@ -1801,6 +1802,7 @@ ${currentSession.outline}
                   onClick={(e) => {
                     e.stopPropagation();
                     setIsCreating(true);
+                    setShowSidebar(false);
                     setActiveSessionId(null);
                     setNewTitle('');
                     setNewOutline('');
