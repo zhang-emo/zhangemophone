@@ -1,0 +1,6 @@
+{
+  "name": "Mobile AI Chat",
+  "description": "一个私用的仿手机的AI聊天应用。拥有精致的手机式UI，支持本地高安全等级SQLite式存储、API Key管理以及完整的备份导入导出功能。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
