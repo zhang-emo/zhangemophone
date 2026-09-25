@@ -14,9 +14,12 @@ import {
   Sparkles,
   Loader2,
   AlertCircle,
-  Sliders
+  Sliders,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import { GmAdventureMemory } from '../lib/types';
+import { cleanMemoryItemText, sanitizeAndMigrateGmMemory } from '../lib/api';
 
 interface GmMemoryModalProps {
   isOpen: boolean;
@@ -40,7 +43,7 @@ export default function GmMemoryModal({
   sessionTitle
 }: GmMemoryModalProps) {
   const [activeTab, setActiveTab] = useState<TabType>('worldRules');
-  const [localMemory, setLocalMemory] = useState<GmAdventureMemory>(memory);
+  const [localMemory, setLocalMemory] = useState<GmAdventureMemory>(() => sanitizeAndMigrateGmMemory(memory));
   const [newItemText, setNewItemText] = useState<string>('');
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState<string>('');
@@ -48,19 +51,19 @@ export default function GmMemoryModal({
 
   useEffect(() => {
     if (isOpen) {
-      setLocalMemory(memory);
+      setLocalMemory(sanitizeAndMigrateGmMemory(memory));
       setNewItemText('');
       setEditingIndex(null);
       setItemToDeleteIndex(null);
     }
-  }, [isOpen]); // Fix: Only reset states when the modal opens, not on every memory prop change
+  }, [isOpen]);
 
   const handleExtractClick = async () => {
     if (isExtracting) return;
     try {
       const result = await onAutoExtract(localMemory);
       if (result) {
-        setLocalMemory(result);
+        setLocalMemory(sanitizeAndMigrateGmMemory(result));
       }
     } catch (e) {
       console.error('Extract click error:', e);
@@ -71,15 +74,29 @@ export default function GmMemoryModal({
 
   const currentList = localMemory[activeTab] || [];
 
+  const handleToggleLock = (itemText: string) => {
+    const clean = cleanMemoryItemText(itemText);
+    if (!clean) return;
+    const currentLocked = localMemory.lockedItems || [];
+    const isLocked = currentLocked.includes(clean);
+    const updatedLocked = isLocked
+      ? currentLocked.filter(t => t !== clean)
+      : [...currentLocked, clean];
+
+    setLocalMemory({
+      ...localMemory,
+      lockedItems: updatedLocked
+    });
+  };
+
   const handleAddItem = () => {
-    let text = newItemText.trim();
+    const text = cleanMemoryItemText(newItemText);
     if (!text) return;
-    if (!text.startsWith('🔒')) {
-      text = `🔒 ${text}`;
-    }
+    // Defaults to unlocked per user specification
     const updated = {
       ...localMemory,
-      [activeTab]: [...(localMemory[activeTab] || []), text]
+      [activeTab]: [...(localMemory[activeTab] || []), text],
+      lockedItems: [...(localMemory.lockedItems || [])]
     };
     setLocalMemory(updated);
     setNewItemText('');
@@ -87,10 +104,14 @@ export default function GmMemoryModal({
 
   const confirmDeleteItem = () => {
     if (itemToDeleteIndex === null) return;
+    const textToDelete = currentList[itemToDeleteIndex];
+    const cleanDelete = cleanMemoryItemText(textToDelete);
     const updatedList = currentList.filter((_, idx) => idx !== itemToDeleteIndex);
+    const updatedLocked = (localMemory.lockedItems || []).filter(t => t !== cleanDelete);
     const updated = {
       ...localMemory,
-      [activeTab]: updatedList
+      [activeTab]: updatedList,
+      lockedItems: updatedLocked
     };
     setLocalMemory(updated);
     if (editingIndex === itemToDeleteIndex) {
@@ -101,47 +122,39 @@ export default function GmMemoryModal({
 
   const handleStartEdit = (index: number, text: string) => {
     setEditingIndex(index);
-    setEditingText(text);
+    setEditingText(cleanMemoryItemText(text));
   };
 
   const handleSaveEdit = (index: number) => {
-    let text = editingText.trim();
-    if (!text) return;
-    if (!text.startsWith('🔒')) {
-      text = `🔒 ${text}`;
+    const oldText = cleanMemoryItemText(currentList[index]);
+    const newText = cleanMemoryItemText(editingText);
+    if (!newText) return;
+
+    const isOldLocked = (localMemory.lockedItems || []).includes(oldText);
+    let updatedLocked = [...(localMemory.lockedItems || [])];
+    if (isOldLocked) {
+      updatedLocked = updatedLocked.filter(t => t !== oldText);
+      if (!updatedLocked.includes(newText)) {
+        updatedLocked.push(newText);
+      }
     }
+
     const updatedList = [...currentList];
-    updatedList[index] = text;
+    updatedList[index] = newText;
     const updated = {
       ...localMemory,
-      [activeTab]: updatedList
+      [activeTab]: updatedList,
+      lockedItems: updatedLocked
     };
     setLocalMemory(updated);
     setEditingIndex(null);
   };
 
   const handleSaveAll = () => {
-    // Merge latest memory prop with localMemory to guarantee no locked items or background additions are lost
-    const mergeArrays = (localArr: string[] = [], parentArr: string[] = []): string[] => {
-      const merged = [...localArr];
-      for (const parentItem of parentArr) {
-        if (!parentItem) continue;
-        const isLocked = parentItem.startsWith('🔒') || parentItem.includes('🔒');
-        if (isLocked && !merged.includes(parentItem)) {
-          merged.push(parentItem);
-        }
-      }
-      return merged;
-    };
-
-    const finalMergedMemory: GmAdventureMemory = {
+    const finalMergedMemory: GmAdventureMemory = sanitizeAndMigrateGmMemory({
       ...memory,
-      ...localMemory,
-      worldRules: mergeArrays(localMemory.worldRules, memory.worldRules),
-      characterStates: mergeArrays(localMemory.characterStates, memory.characterStates),
-      activeQuests: mergeArrays(localMemory.activeQuests, memory.activeQuests),
-      majorChronicles: mergeArrays(localMemory.majorChronicles, memory.majorChronicles),
-    };
+      ...localMemory
+    });
 
     onSave(finalMergedMemory);
     onClose();
@@ -192,11 +205,13 @@ export default function GmMemoryModal({
     (localMemory.activeQuests?.length || 0) +
     (localMemory.majorChronicles?.length || 0);
 
+  const totalLockedCount = (localMemory.lockedItems || []).length;
+
   const itemToDeleteText =
     itemToDeleteIndex !== null ? currentList[itemToDeleteIndex] : null;
 
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center p-2 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
+    <div className="absolute inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
       <motion.div
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -212,8 +227,14 @@ export default function GmMemoryModal({
             <div className="min-w-0">
               <div className="flex items-center space-x-2">
                 <h3 className="text-sm font-black text-slate-800 truncate">GM 核心记忆库</h3>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
-                  前置强约束 · 共 {totalCount} 条
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0 flex items-center gap-1.5">
+                  <span>前置强约束 · 共 {totalCount} 条</span>
+                  {totalLockedCount > 0 && (
+                    <span className="text-amber-700 font-extrabold flex items-center gap-0.5">
+                      <Lock size={10} className="stroke-[2.5]" />
+                      {totalLockedCount} 条已锁定
+                    </span>
+                  )}
                 </span>
               </div>
             </div>
@@ -320,72 +341,110 @@ export default function GmMemoryModal({
                 </p>
               </div>
             ) : (
-              currentList.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="group bg-white border border-slate-200/90 rounded-2xl p-3 sm:p-3.5 shadow-xs hover:border-indigo-200 transition-all flex items-start space-x-2.5 sm:space-x-3"
-                >
-                  <span className="w-5 h-5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5 border border-slate-200">
-                    {idx + 1}
-                  </span>
+              currentList.map((item, idx) => {
+                const cleanItem = cleanMemoryItemText(item);
+                const isLocked = (localMemory.lockedItems || []).includes(cleanItem);
 
-                  <div className="flex-1 min-w-0">
-                    {editingIndex === idx ? (
-                      <div className="space-y-2">
-                        <textarea
-                          value={editingText}
-                          onChange={(e) => setEditingText(e.target.value)}
-                          rows={2}
-                          className="w-full text-xs bg-slate-50 border border-indigo-300 rounded-xl p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-800 leading-relaxed font-medium"
-                        />
-                        <div className="flex items-center space-x-2 justify-end">
-                          <button
-                            type="button"
-                            onClick={() => setEditingIndex(null)}
-                            className="px-2.5 py-1 text-[10px] rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold transition-colors cursor-pointer"
-                          >
-                            取消
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSaveEdit(idx)}
-                            disabled={!editingText.trim()}
-                            className="px-2.5 py-1 text-[10px] rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-colors cursor-pointer flex items-center space-x-1"
-                          >
-                            <Check size={11} />
-                            <span>完成</span>
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-slate-700 leading-relaxed font-medium whitespace-pre-wrap">
-                        {item}
-                      </p>
-                    )}
-                  </div>
-
-                  {editingIndex !== idx && (
-                    <div className="flex items-center space-x-1 shrink-0 opacity-80 group-hover:opacity-100 transition-opacity">
+                return (
+                  <div
+                    key={idx}
+                    className={`group rounded-2xl p-3 sm:p-3.5 shadow-xs transition-all flex items-start space-x-2.5 sm:space-x-3 border ${
+                      isLocked
+                        ? 'bg-amber-50/30 border-amber-300/90 shadow-amber-500/5 ring-1 ring-amber-400/20'
+                        : 'bg-white border-slate-200/90 hover:border-indigo-200'
+                    }`}
+                  >
+                    {/* Left Sequence number & SVG Lock button */}
+                    <div className="flex items-center space-x-1.5 shrink-0 mt-0.5">
+                      <span className="w-5 h-5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-black flex items-center justify-center border border-slate-200">
+                        {idx + 1}
+                      </span>
                       <button
                         type="button"
-                        onClick={() => handleStartEdit(idx, item)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
-                        title="编辑条目"
+                        onClick={() => handleToggleLock(item)}
+                        className={`w-6 h-6 rounded-lg flex items-center justify-center transition-all cursor-pointer ${
+                          isLocked
+                            ? 'bg-amber-100/90 text-amber-600 hover:bg-amber-200 border border-amber-300 shadow-xs'
+                            : 'bg-slate-100/70 text-slate-400 hover:text-slate-700 hover:bg-slate-200/80 border border-slate-200/80'
+                        }`}
+                        title={isLocked ? '已锁定保护（GM提炼时绝对禁止修改或删除），点击可解锁' : '未锁定，点击上锁保护此条记忆不被GM修改'}
                       >
-                        <Edit2 size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setItemToDeleteIndex(idx)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                        title="删除条目"
-                      >
-                        <Trash2 size={13} />
+                        {isLocked ? (
+                          <Lock size={12} className="stroke-[2.5]" />
+                        ) : (
+                          <Unlock size={12} className="stroke-[2]" />
+                        )}
                       </button>
                     </div>
-                  )}
-                </div>
-              ))
+
+                    <div className="flex-1 min-w-0">
+                      {editingIndex === idx ? (
+                        <div className="space-y-2">
+                          <textarea
+                            value={editingText}
+                            onChange={(e) => setEditingText(e.target.value)}
+                            rows={2}
+                            className="w-full text-xs bg-slate-50 border border-indigo-300 rounded-xl p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-800 leading-relaxed font-medium"
+                          />
+                          <div className="flex items-center space-x-2 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setEditingIndex(null)}
+                              className="px-2.5 py-1 text-[10px] rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold transition-colors cursor-pointer"
+                            >
+                              取消
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEdit(idx)}
+                              disabled={!editingText.trim()}
+                              className="px-2.5 py-1 text-[10px] rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-colors cursor-pointer flex items-center space-x-1"
+                            >
+                              <Check size={11} />
+                              <span>完成</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          {isLocked && (
+                            <div className="flex items-center gap-1 mb-1">
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200/80">
+                                <Lock size={10} className="stroke-[2.5]" />
+                                已上锁保护（GM绝对不可改删）
+                              </span>
+                            </div>
+                          )}
+                          <p className="text-xs text-slate-700 leading-relaxed font-medium whitespace-pre-wrap">
+                            {cleanItem}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {editingIndex !== idx && (
+                      <div className="flex items-center space-x-1 shrink-0 opacity-80 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={() => handleStartEdit(idx, item)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                          title="编辑条目"
+                        >
+                          <Edit2 size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setItemToDeleteIndex(idx)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                          title="删除条目"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
 

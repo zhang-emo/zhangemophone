@@ -31,12 +31,15 @@ export function cleanTextForPrompt(text: string): string {
 }
 
 export function withTimeout<T>(promise: Promise<T>, ms: number = 35000, errorMsg = '请求超时，请检查网络或代理设置'): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(errorMsg)), ms)
-    )
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(errorMsg)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
 }
 
 export function getFallbackApiKey(): string {
@@ -1520,22 +1523,96 @@ ${conversationHistory}
 }
 
 /**
+ * Clean memory item text to remove any legacy lock emojis or formatting artifacts
+ */
+export function cleanMemoryItemText(text?: string | null): string {
+  if (!text) return '';
+  return text
+    .replace(/^[🔒🔓\s]+/, '')
+    .replace(/\s*[🔒🔓]\s*/g, ' ')
+    .trim();
+}
+
+/**
+ * Migrate and sanitize GmAdventureMemory:
+ * 1. Strips any legacy '🔒' or '🔓' emoji from text strings
+ * 2. Collects legacy locked items into the lockedItems array
+ * 3. Guarantees deduplicated, clean arrays
+ */
+export function sanitizeAndMigrateGmMemory(mem?: any): GmAdventureMemory {
+  if (!mem || typeof mem !== 'object') {
+    return {
+      worldRules: [],
+      characterStates: [],
+      activeQuests: [],
+      majorChronicles: [],
+      lastUpdatedRound: 0,
+      summaryIntervalRounds: 6,
+      lockedItems: []
+    };
+  }
+
+  const lockedSet = new Set<string>();
+  if (Array.isArray(mem.lockedItems)) {
+    for (const item of mem.lockedItems) {
+      const cleaned = cleanMemoryItemText(String(item));
+      if (cleaned) lockedSet.add(cleaned);
+    }
+  }
+
+  const cleanList = (list: any): string[] => {
+    if (!Array.isArray(list)) return [];
+    const result: string[] = [];
+    const seen = new Set<string>();
+    for (const item of list) {
+      const raw = typeof item === 'string' ? item : (item?.name ? `${item.name}: ${item.state || item.desc || ''}` : String(item || ''));
+      const isLegacyLocked = raw.includes('🔒');
+      const cleaned = cleanMemoryItemText(raw);
+      if (cleaned && !seen.has(cleaned)) {
+        seen.add(cleaned);
+        result.push(cleaned);
+        if (isLegacyLocked) {
+          lockedSet.add(cleaned);
+        }
+      }
+    }
+    return result;
+  };
+
+  const worldRules = cleanList(mem.worldRules);
+  const characterStates = cleanList(mem.characterStates);
+  const activeQuests = cleanList(mem.activeQuests);
+  const majorChronicles = cleanList(mem.majorChronicles);
+
+  return {
+    worldRules,
+    characterStates,
+    activeQuests,
+    majorChronicles,
+    lastUpdatedRound: typeof mem.lastUpdatedRound === 'number' ? mem.lastUpdatedRound : 0,
+    summaryIntervalRounds: typeof mem.summaryIntervalRounds === 'number' ? mem.summaryIntervalRounds : 6,
+    lockedItems: Array.from(lockedSet)
+  };
+}
+
+/**
  * Format GM memory into a high-priority system prompt injection block
  */
 export function formatGmAdventureMemoryPrompt(memory?: GmAdventureMemory | null): string {
   if (!memory) return '';
+  const sanitized = sanitizeAndMigrateGmMemory(memory);
   const parts: string[] = [];
-  if (memory.worldRules && memory.worldRules.length > 0) {
-    parts.push(`【世界法则与铁律（绝不可违背的客观事实与物理/魔法规则）】：\n${memory.worldRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
+  if (sanitized.worldRules && sanitized.worldRules.length > 0) {
+    parts.push(`【世界法则与铁律（绝不可违背的客观事实与物理/魔法规则）】：\n${sanitized.worldRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
   }
-  if (memory.characterStates && memory.characterStates.length > 0) {
-    parts.push(`【角色与NPC实时状态（存活/伤情/位置/态度好感/装备）】：\n${memory.characterStates.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
+  if (sanitized.characterStates && sanitized.characterStates.length > 0) {
+    parts.push(`【角色与NPC实时状态（存活/伤情/位置/态度好感/装备）】：\n${sanitized.characterStates.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
   }
-  if (memory.activeQuests && memory.activeQuests.length > 0) {
-    parts.push(`【当前主线、未决任务与行动动机（最高跟踪优先级，NPC互动与剧情推进必须紧扣这些未完成目标）】：\n${memory.activeQuests.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
+  if (sanitized.activeQuests && sanitized.activeQuests.length > 0) {
+    parts.push(`【当前主线、未决任务与行动动机（最高跟踪优先级，NPC互动与剧情推进必须紧扣这些未完成目标）】：\n${sanitized.activeQuests.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
   }
-  if (memory.majorChronicles && memory.majorChronicles.length > 0) {
-    parts.push(`【已发生重大历史与既定事实（不可吃书、推翻或前后矛盾）】：\n${memory.majorChronicles.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
+  if (sanitized.majorChronicles && sanitized.majorChronicles.length > 0) {
+    parts.push(`【已发生重大历史与既定事实（不可吃书、推翻或前后矛盾）】：\n${sanitized.majorChronicles.map((r, i) => `${i + 1}. ${r}`).join('\n')}`);
   }
   if (parts.length === 0) return '';
   return `\n\n=== 【GM 核心记忆与现实锚点 - 最高优先级铁律（绝对禁止前后矛盾与遗忘）】 ===\n${parts.join('\n\n')}\n【GM 逻辑铁律执行要求】：\n1. 在生成后续的所有环境、情节发展、NPC言行反应和判定时，必须以以上核心事实为绝对基准。\n2. 重点关注【当前主线与未决任务】，在玩家行动时提供强因果反馈，主动推进未决目标。\n3. 严禁出现任何违背已知死生、遗忘已获得线索、或吃书前后矛盾的情节！\n`;
@@ -1553,7 +1630,20 @@ export async function extractGmAdventureMemory(
   const userApiKey = settings?.apiKey?.trim();
   const fallbackApiKey = getFallbackApiKey();
 
-  const existingMemoryStr = existingMemory ? JSON.stringify(existingMemory, null, 2) : '暂无既往记忆库';
+  const sanitizedExisting = sanitizeAndMigrateGmMemory(existingMemory);
+  const allLockedItems = new Set<string>(sanitizedExisting.lockedItems || []);
+
+  const lockedNoticeStr = allLockedItems.size > 0
+    ? Array.from(allLockedItems).map(it => `  * ${it}`).join('\n')
+    : '  * （暂无锁定条目）';
+
+  const existingMemoryStr = JSON.stringify({
+    worldRules: sanitizedExisting.worldRules,
+    characterStates: sanitizedExisting.characterStates,
+    activeQuests: sanitizedExisting.activeQuests,
+    majorChronicles: sanitizedExisting.majorChronicles,
+  }, null, 2);
+
   const recentHistoryStr = history.slice(-30).map(m => `${m.role === 'user' ? '玩家' : 'GM'}: ${cleanTextForPrompt(m.content)}`).join('\n\n');
 
   const prompt = `你是一个专业文游（跑团/TRPG）的 GM 核心记忆提炼专家。
@@ -1564,6 +1654,9 @@ ${outline}
 
 【已有 GM 记忆库（当前状态）】：
 ${existingMemoryStr}
+
+【玩家已锁定的核心条目（最高保护级别，绝对不可删除、不可修改、必须原样完整保留在相应分类中）】：
+${lockedNoticeStr}
 
 【近期演进剧情记录（最新发展）】：
 ${recentHistoryStr || '游戏刚开始。'}
@@ -1580,7 +1673,7 @@ ${recentHistoryStr || '游戏刚开始。'}
      * [支线-进行中] 支线目标与触发来源
      * [玩家动机] 玩家主动声明的近期行动方向
      * [关键线索] 待查明或正在验证的重要线索
-   - 【淘汰更新】：已彻底完成或过时的任务，必须从 activeQuests 中剔除，转化为 majorChronicles 或删除。
+   - 【淘汰更新】：已彻底完成或过时的任务（未锁定的），必须从 activeQuests 中剔除，转化为 majorChronicles 或删除。
 
 2. characterStates (角色与NPC状态 - 容量 8~12 条)：
    - 记录主角及当前有深度互动核心 NPC 的实时状态。
@@ -1596,13 +1689,15 @@ ${recentHistoryStr || '游戏刚开始。'}
    - 格式规范：[大事件] 简明描述已发生的大事件及不可逆结果。
 
 【重要约束】：
+- 【强制全中文输出】：所有提炼出的记忆条目必须严格使用纯正、自然的简体中文！严禁夹杂任何英文词汇、英文句式或语法缩写（例如严禁输出 "favor"、"hit"、"'s"、"quest"、"status"、"level" 等，必须准确转化为中文，如“好感度达到...”、“诺顿的好感度”等）。
+- 【锁定条目绝对保护】：玩家已锁定的核心条目，【绝对不允许删除或修改】，必须一字不差原样保留！
+- 【纯净文本】：不要在条目文字中输出 🔒、🔓 等锁符号 emoji，系统界面有独立的矢量锁控件进行管理。
 - 拒绝琐碎日常废话，只保留影响后续剧情走向和逻辑因果的核心事实！
-- 【玩家手写保护指令】：以 🔒 符号开头的玩家私设条目，【绝对不允许删除或修改】，必须原样一字不漏地保留！
 - 总条目数严格控制在 35~50 条以内，保证记忆高浓度、高准确度。
 - 【先思考后输出】：先用 <thought>...</thought> 思考近期有哪些新任务、新角色动态及需要淘汰的旧任务，然后输出标准的 JSON 代码块：
 \`\`\`json
 {
-  "worldRules": ["🔒底层规则...", "规则2..."],
+  "worldRules": ["底层规则1...", "规则2..."],
   "characterStates": ["[主角] 状态良好，持有生锈铁剑，位于溪木镇", "[NPC:阿尔沃] 镇上铁匠，对主角友善"],
   "activeQuests": ["[主线-进行中] 前往龙临堡向领主报告龙袭消息", "[玩家动机] 寻找铁匠铺修复佩剑", "[关键线索] 废墟发现龙语石板碎屑"],
   "majorChronicles": ["[大事件] 成功从海尔根龙灾中生还"]
@@ -1761,6 +1856,19 @@ ${recentHistoryStr || '游戏刚开始。'}
     return null;
   };
 
+  const sanitizeMemoryText = (str: string): string => {
+    if (!str) return '';
+    return str
+      .replace(/([^\s,;]+)'s\s*favor\s*(?:hit|reached|is|=)\s*(\d+)/gi, '$1的好感度达到 $2')
+      .replace(/([^\s,;]+)'s\s*favor/gi, '$1的好感度')
+      .replace(/\bfavor\s*(?:hit|reached|is|=)\s*(\d+)/gi, '好感度达到 $1')
+      .replace(/\bfavor\b/gi, '好感度')
+      .replace(/\bstatus\b/gi, '状态')
+      .replace(/\bactive\b/gi, '进行中')
+      .replace(/\bcompleted\b/gi, '已完成')
+      .trim();
+  };
+
   const getArrayFromParsed = (parsed: any, keys: string[]): string[] | null => {
     if (!parsed || typeof parsed !== 'object') return null;
     for (const key of keys) {
@@ -1768,12 +1876,13 @@ ${recentHistoryStr || '游戏刚开始。'}
       if (Array.isArray(val) && val.length > 0) {
         return val
           .map((item: any) => typeof item === 'string' ? item : (item.name ? `${item.name}: ${item.state || item.desc || item.status || ''}` : JSON.stringify(item)))
-          .map((s: string) => s.trim())
+          .map((s: string) => sanitizeMemoryText(s.trim()))
           .filter(Boolean);
       }
       if (typeof val === 'string' && val.trim().length > 0) {
         const splitLines = val.split('\n')
           .map(l => l.replace(/^[🔒\s\-*•、()（）\[\]【】]+/, '').replace(/^\d+[\.\s、\)\-—]+/, '').replace(/^"|"$/g, '').trim())
+          .map(l => sanitizeMemoryText(l))
           .filter(l => l.length > 1);
         if (splitLines.length > 0) {
           return splitLines;
@@ -1785,7 +1894,7 @@ ${recentHistoryStr || '游戏刚开始。'}
 
   /**
    * Deterministic lock protection & deduplication merge helper with capacity bounds.
-   * Guarantees that any existing items with 🔒 (or custom player rules) are NEVER deleted or overwritten by AI extraction.
+   * Guarantees that any existing items locked by the player are NEVER deleted or overwritten by AI extraction.
    * Capped to max capacity to maintain token efficiency and focus.
    */
   const mergeAndPreserveLockedItems = (
@@ -1797,19 +1906,25 @@ ${recentHistoryStr || '游戏刚开始。'}
     const existing = existingItems || [];
     const extracted = extractedItems || [];
 
-    // Identify all locked items from existing memory
-    const lockedExisting = existing.filter(item => item && (item.startsWith('🔒') || item.includes('🔒')));
+    // Identify all locked items from existing memory in this category
+    const lockedInCategory: string[] = [];
+    for (const item of existing) {
+      const clean = cleanMemoryItemText(item);
+      if (!clean) continue;
+      if (allLockedItems.has(clean) || item.includes('🔒')) {
+        lockedInCategory.push(clean);
+        allLockedItems.add(clean);
+      }
+    }
 
     if (extracted.length === 0) {
-      return existing.length > 0 ? existing.slice(0, maxCapacity) : defaultFallback;
+      return existing.length > 0 ? existing.map(cleanMemoryItemText).slice(0, maxCapacity) : defaultFallback;
     }
 
     // Clean comparison helper to detect duplicates
     const normalizeKey = (str: string) => {
-      return str
-        .replace(/^[🔒\s\-*•、()（）\[\]【】]+/, '')
+      return cleanMemoryItemText(str)
         .replace(/^\d+[\.\s、\)\-—]+/, '')
-        .replace(/^[🔒\s\-*•、()（）\[\]【】]+/, '')
         .trim()
         .toLowerCase();
     };
@@ -1818,25 +1933,29 @@ ${recentHistoryStr || '游戏刚开始。'}
     const seenNormalized = new Set<string>();
 
     // 1. Mandatory First Priority: Add all locked items from existing memory
-    for (const lockedItem of lockedExisting) {
-      const norm = normalizeKey(lockedItem);
+    for (const lockedItem of lockedInCategory) {
+      const clean = cleanMemoryItemText(lockedItem);
+      if (!clean) continue;
+      const norm = normalizeKey(clean);
       if (norm) {
         seenNormalized.add(norm);
       }
-      mergedList.push(lockedItem);
+      mergedList.push(clean);
     }
 
     // 2. Add extracted items (preserving newly extracted items or updated AI items) up to max capacity
     for (const extItem of extracted) {
       if (mergedList.length >= maxCapacity) break;
-      const norm = normalizeKey(extItem);
+      const clean = cleanMemoryItemText(extItem);
+      if (!clean) continue;
+      const norm = normalizeKey(clean);
       if (!norm) continue;
 
       // If AI outputted a variant of the locked item, skip it because we already kept the pristine locked version
       if (seenNormalized.has(norm)) continue;
 
       seenNormalized.add(norm);
-      mergedList.push(extItem);
+      mergedList.push(clean);
     }
 
     return mergedList.length > 0 ? mergedList : defaultFallback;
@@ -1867,28 +1986,28 @@ ${recentHistoryStr || '游戏刚开始。'}
 
     const worldRules = mergeAndPreserveLockedItems(
       extractedWorldRules,
-      existingMemory?.worldRules,
+      sanitizedExisting.worldRules,
       ['遵循本剧本世界观的底层物理与魔法规则'],
       8
     );
 
     const characterStates = mergeAndPreserveLockedItems(
       extractedCharStates,
-      existingMemory?.characterStates,
+      sanitizedExisting.characterStates,
       ['[主角] 当前状态良好，积极探索剧情中'],
       12
     );
 
     const activeQuests = mergeAndPreserveLockedItems(
       extractedQuests,
-      existingMemory?.activeQuests,
+      sanitizedExisting.activeQuests,
       ['[主线-进行中] 展开探索与互动，推动剧情发展'],
       15
     );
 
     const majorChronicles = mergeAndPreserveLockedItems(
       extractedChronicles,
-      existingMemory?.majorChronicles,
+      sanitizedExisting.majorChronicles,
       ['[大事件] 序章：冒险由此开启'],
       15
     );
@@ -1899,7 +2018,8 @@ ${recentHistoryStr || '游戏刚开始。'}
       activeQuests,
       majorChronicles,
       lastUpdatedRound: playerTurnCount,
-      summaryIntervalRounds: Number(existingMemory?.summaryIntervalRounds) || 6
+      summaryIntervalRounds: Number(sanitizedExisting.summaryIntervalRounds) || 6,
+      lockedItems: Array.from(allLockedItems)
     };
   };
 

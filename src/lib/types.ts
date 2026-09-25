@@ -192,6 +192,7 @@ export interface GmAdventureMemory {
   majorChronicles: string[];  // 重大编年史
   lastUpdatedRound?: number;
   summaryIntervalRounds?: number; // 提炼记忆触发轮数 (4: 密集模式, 6: 均衡模式[推荐], 8: 经济模式)
+  lockedItems?: string[];     // 玩家手动锁定的条目文本列表（系统强保证其不被AI修改或删除）
 }
 
 export interface WorldBookConfig {

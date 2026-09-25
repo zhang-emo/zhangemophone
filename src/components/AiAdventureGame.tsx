@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import mammoth from 'mammoth';
 import { dbInstance } from '../lib/db';
-import { getEffectiveModel, formatGmAdventureMemoryPrompt, extractGmAdventureMemory, callOpenAIEndpoint, getFallbackApiKey, withTimeout } from '../lib/api';
+import { getEffectiveModel, formatGmAdventureMemoryPrompt, extractGmAdventureMemory, callOpenAIEndpoint, getFallbackApiKey, withTimeout, sanitizeAndMigrateGmMemory } from '../lib/api';
 import { GmAdventureMemory } from '../lib/types';
 import { GoogleGenAI } from '@google/genai';
 import GmMemoryModal from './GmMemoryModal';
@@ -67,7 +67,9 @@ const DEFAULT_GM_MEMORY: GmAdventureMemory = {
   characterStates: [],
   activeQuests: [],
   majorChronicles: [],
-  lastUpdatedRound: 0
+  lastUpdatedRound: 0,
+  summaryIntervalRounds: 6,
+  lockedItems: []
 };
 
 export default function AiAdventureGame({
@@ -207,7 +209,7 @@ export default function AiAdventureGame({
 
         const savedMem = localStorage.getItem(`ai_text_adventure_memory_${activeSessionId}`);
         if (savedMem) {
-          setGmMemory(JSON.parse(savedMem));
+          setGmMemory(sanitizeAndMigrateGmMemory(JSON.parse(savedMem)));
         } else {
           setGmMemory(DEFAULT_GM_MEMORY);
         }
@@ -242,8 +244,9 @@ export default function AiAdventureGame({
 
   // 5.1 Save GM Memory Helper
   const saveMemoryToLocal = (sessionId: string, updatedMem: GmAdventureMemory) => {
-    setGmMemory(updatedMem);
-    localStorage.setItem(`ai_text_adventure_memory_${sessionId}`, JSON.stringify(updatedMem));
+    const cleanMem = sanitizeAndMigrateGmMemory(updatedMem);
+    setGmMemory(cleanMem);
+    localStorage.setItem(`ai_text_adventure_memory_${sessionId}`, JSON.stringify(cleanMem));
   };
 
   // 5.2 Manual Extract / Update GM Memory
@@ -420,26 +423,22 @@ export default function AiAdventureGame({
         setActiveSessionId(remaining[0].id);
       } else {
         setActiveSessionId(null);
-        setIsCreating(true);
+        setIsCreating(false);
         setShowSidebar(false);
       }
     }
     setSessionToDeleteId(null);
   };
 
-  // 7.1 Helper to close creation modal safely (prevent zero-session blank state)
+  // 7.1 Helper to close creation modal safely (without kicking user out or deleting draft)
   const handleCloseCreatingModal = () => {
-    if (sessions.length > 0) {
-      setIsCreating(false);
-      setNewTitle('');
-      setNewOutline('');
-      setFileName('');
-      setFileType('manual');
-      setUploadError(null);
-      setErrorText(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+    if (isGenerating) return;
+    setIsCreating(false);
+    setUploadError(null);
+    setErrorText(null);
+    // If there were existing sessions and no active session selected, restore first session
+    if (sessions.length > 0 && !activeSessionId) {
+      setActiveSessionId(sessions[0].id);
     }
   };
 
@@ -459,10 +458,10 @@ export default function AiAdventureGame({
 
       let sessMemory: GmAdventureMemory = DEFAULT_GM_MEMORY;
       if (session.id === activeSessionId && gmMemory) {
-        sessMemory = gmMemory;
+        sessMemory = sanitizeAndMigrateGmMemory(gmMemory);
       } else {
         const storedMem = localStorage.getItem(`ai_text_adventure_memory_${session.id}`);
-        sessMemory = storedMem ? JSON.parse(storedMem) : DEFAULT_GM_MEMORY;
+        sessMemory = storedMem ? sanitizeAndMigrateGmMemory(JSON.parse(storedMem)) : DEFAULT_GM_MEMORY;
       }
 
       const savePackage = {
@@ -603,14 +602,7 @@ export default function AiAdventureGame({
         }));
 
         const rawMem = parsed.gmMemory;
-        const newMemory: GmAdventureMemory = {
-          worldRules: Array.isArray(rawMem?.worldRules) ? rawMem.worldRules : [],
-          characterStates: Array.isArray(rawMem?.characterStates) ? rawMem.characterStates : [],
-          activeQuests: Array.isArray(rawMem?.activeQuests) ? rawMem.activeQuests : [],
-          majorChronicles: Array.isArray(rawMem?.majorChronicles) ? rawMem.majorChronicles : [],
-          lastUpdatedRound: Number(rawMem?.lastUpdatedRound) || 0,
-          summaryIntervalRounds: Number(rawMem?.summaryIntervalRounds) || 6
-        };
+        const newMemory: GmAdventureMemory = sanitizeAndMigrateGmMemory(rawMem);
 
         saveMemoryToLocal(newId, newMemory);
         saveMessagesToLocal(newId, newMessages);
@@ -792,9 +784,20 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
         timestamp: Date.now()
       };
       saveMessagesToLocal(newSession.id, [startMsg]);
+      showToast('文游世界构筑完毕，GM已入场！', 'success');
+      // Clean draft on success only
+      setNewTitle('');
+      setNewOutline('');
+      setFileName('');
+      setFileType('manual');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     } catch (err: any) {
       console.error(err);
-      setErrorText(`开启文游首回合失败: ${err.message || err}`);
+      const errMsg = `开启文游首回合失败: ${err.message || '网络连接或响应异常'}`;
+      setErrorText(errMsg);
+      showToast(errMsg, 'error');
       // Clean up failed session & orphaned localstorage entries
       saveSessionsToLocal(sessions);
       try {
@@ -804,17 +807,10 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
         console.warn('Failed to clean up aborted session keys', cleanErr);
       }
       setActiveSessionId(sessions.length > 0 ? sessions[0].id : null);
-      if (sessions.length === 0) setIsCreating(true);
+      // Re-open creation modal so player can adjust outline or retry without losing text
+      setIsCreating(true);
     } finally {
       setIsGenerating(false);
-      // Clean state
-      setNewTitle('');
-      setNewOutline('');
-      setFileName('');
-      setFileType('manual');
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
     }
   };
 
@@ -1231,8 +1227,20 @@ ${currentSession.outline}
 
             <button
               type="button"
+              onClick={() => {
+                setIsCreating(true);
+                setShowSidebar(false);
+              }}
+              className="h-8 w-8 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-600 hover:bg-indigo-100 shadow-sm transition-all cursor-pointer flex items-center justify-center shrink-0"
+              title="构建新文游"
+            >
+              <Plus size={16} className="stroke-[2.5]" />
+            </button>
+
+            <button
+              type="button"
               onClick={() => setShowSidebar(!showSidebar)}
-              className="h-8 w-8 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 shadow-sm transition-all cursor-pointer flex items-center justify-center"
+              className="h-8 w-8 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 shadow-sm transition-all cursor-pointer flex items-center justify-center shrink-0"
               title={showSidebar ? "隐藏侧栏" : "显示侧栏"}
             >
               <Menu size={15} />
@@ -1481,13 +1489,16 @@ ${currentSession.outline}
       {/* 2.1 CREATING NEW GAME MODAL */}
       <AnimatePresence>
         {isCreating && (
-          <div className="fixed inset-0 z-60 flex items-center justify-center p-4">
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-3 sm:p-4 overflow-hidden">
             {/* Backdrop */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={handleCloseCreatingModal}
+              onClick={() => {
+                if (isGenerating) return;
+                handleCloseCreatingModal();
+              }}
               className="absolute inset-0 bg-slate-900/50 backdrop-blur-xs"
             />
 
@@ -1496,28 +1507,33 @@ ${currentSession.outline}
               initial={{ scale: 0.95, y: 20, opacity: 0 }}
               animate={{ scale: 1, y: 0, opacity: 1 }}
               exit={{ scale: 0.95, y: 20, opacity: 0 }}
-              className="bg-white rounded-3xl border border-slate-100 shadow-2xl p-6 relative flex flex-col space-y-4 z-50 max-w-lg w-full max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-3xl border border-slate-100 shadow-2xl relative flex flex-col z-50 max-w-lg w-full max-h-[92%] sm:max-h-[90%] overflow-hidden"
             >
-              {/* Close Button (Only show if there are existing sessions to go back to) */}
-              {sessions.length > 0 && (
+              {/* Pinned Header: Close button never scrolls out of view */}
+              <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50/70">
+                <div className="flex items-center space-x-3 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-violet-500 text-white flex items-center justify-center shadow-md shrink-0">
+                    <Sparkles size={18} className="animate-pulse" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-black text-slate-800 truncate">构建新的 AI 文游</h2>
+                    <p className="text-[10px] text-slate-500 truncate">AI 充当专属 GM，根据设定开展高沉浸文字冒险</p>
+                  </div>
+                </div>
+
                 <button
                   type="button"
                   onClick={handleCloseCreatingModal}
-                  className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                  disabled={isGenerating}
+                  className="w-8 h-8 rounded-full hover:bg-slate-200/60 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer flex items-center justify-center shrink-0 disabled:opacity-40"
+                  title="关闭"
                 >
-                  <X size={16} />
+                  <X size={18} />
                 </button>
-              )}
-
-              <div className="text-center space-y-1.5">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-500 to-violet-400 text-white flex items-center justify-center mx-auto shadow-md">
-                  <Sparkles size={24} className="animate-pulse" />
-                </div>
-                <h2 className="text-base font-black text-slate-800">构建新的 AI 文游</h2>
-                <p className="text-[11px] text-slate-500">上传您喜欢的世界观、跑团模组、游戏大纲或直接输入，AI 将扮演完美 GM 为您提供无限精彩对话</p>
               </div>
 
-              <div className="space-y-4">
+              {/* Scrollable Form Body */}
+              <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
                 {/* Title input */}
                 <div className="space-y-1">
                   <label className="text-[11px] font-black text-slate-500 block uppercase tracking-wider">冒险剧本标题</label>
@@ -1608,7 +1624,7 @@ ${currentSession.outline}
                   <textarea
                     value={newOutline}
                     onChange={(e) => setNewOutline(e.target.value)}
-                    placeholder=""
+                    placeholder="输入文游的世界观、主角设定、当前处境或模组核心规则..."
                     rows={5}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-indigo-500 focus:bg-white resize-none font-medium leading-relaxed"
                   />
@@ -1620,13 +1636,23 @@ ${currentSession.outline}
                     <span>{errorText}</span>
                   </div>
                 )}
+              </div>
 
-                {/* Start game button */}
+              {/* Pinned Action Footer */}
+              <div className="p-4 border-t border-slate-100 bg-white flex items-center space-x-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCloseCreatingModal}
+                  disabled={isGenerating}
+                  className="py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer shrink-0"
+                >
+                  取消
+                </button>
                 <button
                   type="button"
                   onClick={handleStartGame}
                   disabled={isGenerating}
-                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-600 text-white font-black text-xs shadow-md shadow-indigo-200 transition-all active:scale-[0.98] disabled:opacity-50 disabled:scale-100 flex items-center justify-center space-x-1.5 cursor-pointer"
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-600 text-white font-black text-xs shadow-md shadow-indigo-200 transition-all active:scale-[0.98] disabled:opacity-50 disabled:scale-100 flex items-center justify-center space-x-1.5 cursor-pointer"
                 >
                   {isGenerating ? (
                     <>
@@ -1649,7 +1675,7 @@ ${currentSession.outline}
       {/* Session Delete Confirmation Dialog */}
       <AnimatePresence>
         {sessionToDeleteId && (
-          <div className="fixed inset-0 z-60 flex items-center justify-center p-4">
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -1698,7 +1724,7 @@ ${currentSession.outline}
       {/* Message Delete Confirmation Dialog */}
       <AnimatePresence>
         {messageToDeleteId && (
-          <div className="fixed inset-0 z-60 flex items-center justify-center p-4">
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -1803,7 +1829,6 @@ ${currentSession.outline}
                     e.stopPropagation();
                     setIsCreating(true);
                     setShowSidebar(false);
-                    setActiveSessionId(null);
                     setNewTitle('');
                     setNewOutline('');
                     setFileName('');
@@ -1954,7 +1979,7 @@ ${currentSession.outline}
             initial={{ opacity: 0, y: -20, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.9 }}
-            className={`fixed top-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl shadow-lg text-xs font-bold flex items-center space-x-2 text-white border ${
+            className={`absolute top-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl shadow-lg text-xs font-bold flex items-center space-x-2 text-white border pointer-events-none ${
               toast.type === 'error'
                 ? 'bg-red-600 border-red-500'
                 : 'bg-slate-900 border-slate-800'
