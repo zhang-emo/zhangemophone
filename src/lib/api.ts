@@ -9,7 +9,14 @@ import { GoogleGenAI } from '@google/genai';
 
 export function getEffectiveModel(settings: { selectedModel?: string }, defaultModel = 'gpt-4o'): string {
   if (settings.selectedModel && settings.selectedModel !== 'custom') {
-    return settings.selectedModel;
+    const m = settings.selectedModel;
+    if (m === 'gemini-2.5-flash' || m === 'gemini-2.0-flash' || m === 'gemini-1.5-flash') {
+      return 'gemini-3.8-flash';
+    }
+    if (m === 'gemini-2.5-pro' || m === 'gemini-2.0-pro' || m === 'gemini-1.5-pro') {
+      return 'gemini-3.1-pro-preview';
+    }
+    return m;
   }
   return defaultModel;
 }
@@ -1481,7 +1488,7 @@ ${conversationHistory}
 
       const response = await withTimeout(
         ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
           contents: prompt
         }),
         35000,
@@ -2059,7 +2066,7 @@ ${recentHistoryStr || '游戏刚开始。'}
 
       const response = await withTimeout(
         ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
           contents: prompt,
           config: {
             temperature: 0.7

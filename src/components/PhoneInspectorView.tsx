@@ -419,7 +419,7 @@ ${jsonFormat}`;
       } else if (fallbackApiKey) {
         const ai = new GoogleGenAI({ apiKey: fallbackApiKey });
         const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
           contents: prompt
         });
         text = response.text || '';

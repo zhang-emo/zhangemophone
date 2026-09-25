@@ -629,7 +629,7 @@ export default function AiAdventureGame({
   // 8. Call LLM Proxy logic
   const callLlm = async (systemPrompt: string, history: AdventureMessage[], userPrompt: string): Promise<string> => {
     const settings = await dbInstance.getSettings();
-    const model = getEffectiveModel(settings, 'gemini-2.5-flash');
+    const model = getEffectiveModel(settings, 'gemini-3.8-flash');
     
     // Construct request messages
     const apiMessages = [
@@ -674,7 +674,7 @@ export default function AiAdventureGame({
       // Transform messages for Gemini format with timeout protection
       const response = await withTimeout(
         ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
           contents: [
             { role: 'user', parts: [{ text: `${systemPrompt}\n\n当前对话及游玩记录：\n${history.map(m => `${m.role === 'user' ? '玩家' : 'GM'}: ${m.content}`).join('\n')}\n玩家最新操作: ${userPrompt}` }] }
           ],

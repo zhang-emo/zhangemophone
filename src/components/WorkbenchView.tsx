@@ -70,7 +70,7 @@ export default function WorkbenchView({ onHome }: WorkbenchViewProps = {}) {
   const [showApiSettings, setShowApiSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('https://api.openai.com/v1');
-  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
+  const [selectedModel, setSelectedModel] = useState('gemini-3.8-flash');
   const [temperature, setTemperature] = useState(0.8);
   const [showApiKeyPreview, setShowApiKeyPreview] = useState(false);
 
@@ -234,7 +234,7 @@ export default function WorkbenchView({ onHome }: WorkbenchViewProps = {}) {
           const parsed = JSON.parse(savedCustom);
           setApiKey(parsed.apiKey || '');
           setBaseUrl(parsed.baseUrl || 'https://api.openai.com/v1');
-          setSelectedModel(parsed.selectedModel || 'gemini-2.5-flash');
+          setSelectedModel(parsed.selectedModel || 'gemini-3.8-flash');
           setTemperature(parsed.temperature ?? 0.8);
           return;
         } catch (e) {}
@@ -246,7 +246,7 @@ export default function WorkbenchView({ onHome }: WorkbenchViewProps = {}) {
         if (stored) {
           setApiKey(stored.apiKey || '');
           setBaseUrl(stored.baseUrl || 'https://api.openai.com/v1');
-          setSelectedModel(stored.selectedModel || 'gemini-2.5-flash');
+          setSelectedModel(stored.selectedModel || 'gemini-3.8-flash');
           setTemperature(stored.temperature ?? 0.8);
         }
       } catch (err) {}
@@ -278,7 +278,7 @@ export default function WorkbenchView({ onHome }: WorkbenchViewProps = {}) {
       if (stored && stored.apiKey) {
         setApiKey(stored.apiKey);
         setBaseUrl(stored.baseUrl || 'https://api.openai.com/v1');
-        setSelectedModel(stored.selectedModel || 'gemini-2.5-flash');
+        setSelectedModel(stored.selectedModel || 'gemini-3.8-flash');
         setTemperature(stored.temperature ?? 0.8);
         setErrorText(null);
       } else {
@@ -378,7 +378,7 @@ ${liveOutline || "（目前为空，等待策划）"}
         const promptWithContext = `${systemPrompt}\n\n当前聊天上下文：\n${historyContext}\n\n请针对玩家最新输入：“${lastUserText}” 给出最新回复和大纲：`;
 
         const res = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
           contents: [{ role: 'user', parts: [{ text: promptWithContext }] }],
           config: {
             maxOutputTokens: 4000,
@@ -760,8 +760,8 @@ ${liveOutline || "（目前为空，等待策划）"}
                     onChange={(e) => setSelectedModel(e.target.value)}
                     className="w-full bg-gray-50 border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-indigo-500 font-sans text-slate-700 font-bold cursor-pointer"
                   >
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                    <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                    <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
                     <option value="deepseek-chat">DeepSeek Chat (V3)</option>
                     <option value="deepseek-reasoner">DeepSeek R1 (推理)</option>
                     <option value="gpt-4o-mini">GPT-4o Mini</option>
