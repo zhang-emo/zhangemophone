@@ -256,7 +256,7 @@ export default function ContactDetailModal({
       gender,
       patience,
       relationship,
-      background: background.trim(),
+      background: cleanBackgroundText(background.trim()),
       userImpression: userImpression.trim(),
       avatar,
       narrationModeEnabled,
@@ -282,12 +282,14 @@ export default function ContactDetailModal({
 
     const updatedSession: ChatSession = {
       ...contact,
-      memoryEntries: updatedEntries
+      memoryEntries: updatedEntries,
+      memory: cleanBackgroundText(contact.memory || '')
     };
 
     try {
       await dbInstance.saveSession(updatedSession);
       contact.memoryEntries = updatedEntries;
+      contact.memory = updatedSession.memory;
       setEditingMemoryEntryId(null);
     } catch (err) {
       console.error('Failed to update memory entry in contact modal:', err);
@@ -305,12 +307,14 @@ export default function ContactDetailModal({
 
     const updatedSession: ChatSession = {
       ...contact,
-      memoryEntries: updatedEntries
+      memoryEntries: updatedEntries,
+      memory: cleanBackgroundText(contact.memory || '')
     };
 
     try {
       await dbInstance.saveSession(updatedSession);
       contact.memoryEntries = updatedEntries;
+      contact.memory = updatedSession.memory;
     } catch (err) {
       console.error('Failed to delete memory entry in contact modal:', err);
     } finally {
@@ -531,13 +535,16 @@ export default function ContactDetailModal({
               {/* Character Background with Big Text Modal Option */}
               <div className="space-y-1">
                 <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-bold text-gray-500 block">性格及身份背景设定（记忆与背景设定）</label>
+                  <div className="flex items-center space-x-1.5">
+                    <label className="text-[10px] font-bold text-gray-700 block">角色身份背景与性格设定</label>
+                    <span className="text-[9px] text-gray-400 font-normal">（纯净背景，不含日期记忆卡片）</span>
+                  </div>
                   <button
                     type="button"
                     onClick={() =>
                       setBigTextModal({
                         isOpen: true,
-                        title: '编辑性格及身份背景设定',
+                        title: '编辑角色身份背景与性格设定',
                         field: 'background',
                         tempValue: background
                       })
@@ -552,20 +559,24 @@ export default function ContactDetailModal({
                   rows={3}
                   value={background}
                   onChange={(e) => setBackground(e.target.value)}
-                  placeholder="请输入性格口癖、背景身份与日常经历..."
+                  placeholder="请输入性格口癖、背景身份与日常经历...（记忆卡片在下方独立卡片区域管理，不混入此处）"
                   className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:outline-none focus:border-gray-900 focus:bg-[#f0f0f0] leading-relaxed font-sans"
                 />
               </div>
 
-
-
-              {/* Date memory cards display */}
+              {/* Date memory cards display - Independent from character background */}
               {contact.memoryEntries && contact.memoryEntries.length > 0 && (
-                <div className="space-y-1.5 pt-1">
-                  <div className="flex items-center justify-between text-[10px] font-bold text-gray-500">
-                    <span>历史记忆片段 ({contact.memoryEntries.length})</span>
+                <div className="space-y-1.5 pt-2 border-t border-gray-100">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-gray-600">
+                    <div className="flex items-center space-x-1.5">
+                      <span>历史记忆片段 ({contact.memoryEntries.length})</span>
+                      <span className="text-[9px] text-purple-700 font-semibold">（独立记忆卡片）</span>
+                    </div>
                     <span className="text-[9px] text-purple-700 font-mono">保留: 最近{contact.memoryRetentionDays || 30}天</span>
                   </div>
+                  <p className="text-[9px] text-gray-400 leading-tight">
+                    记忆卡片独立存储与管理，自动注入AI对话，不污染角色身份背景框。
+                  </p>
                   <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                     {contact.memoryEntries.map(entry => {
                       const isValid = !contact.memoryRetentionDays || (Date.now() - entry.timestamp <= (contact.memoryRetentionDays || 30) * 86400000);

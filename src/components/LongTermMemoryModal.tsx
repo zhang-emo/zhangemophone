@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import { Brain, X, Zap, Calendar, Trash, Edit, Check, Clock, Plus, RefreshCw, AlertCircle, Sparkles } from 'lucide-react';
 import { ChatSession, ChatMessage, MemoryEntry } from '../lib/types';
-import { generate24HourMemorySummary } from '../lib/api';
+import { generate24HourMemorySummary, cleanBackgroundText } from '../lib/api';
 
 interface LongTermMemoryModalProps {
   session: ChatSession;
@@ -24,7 +24,6 @@ export const LongTermMemoryModal: React.FC<LongTermMemoryModalProps> = ({
   const [enabled, setEnabled] = useState<boolean>(session.longTermMemoryEnabled ?? true);
   const [retentionDays, setRetentionDays] = useState<number>(session.memoryRetentionDays ?? 30);
   const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>(session.memoryEntries || []);
-  const [backdropMemory, setBackdropMemory] = useState<string>(session.memory || '');
 
   const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
@@ -79,16 +78,11 @@ export const LongTermMemoryModal: React.FC<LongTermMemoryModalProps> = ({
         timestamp: Date.now()
       };
 
-      // Add to memory entries
+      // Add to memory entries only (independent from character background box)
       const updatedEntries = [newEntry, ...memoryEntries];
       setMemoryEntries(updatedEntries);
 
-      // Append summary directly to the memory backdrop textarea
-      const formattedAppend = `\n📅 [${todayStr} 24h记忆总结]: ${summaryText}`;
-      const updatedBackdrop = backdropMemory.trim() ? `${backdropMemory.trim()}${formattedAppend}` : `📅 [${todayStr} 24h记忆总结]: ${summaryText}`;
-      setBackdropMemory(updatedBackdrop);
-
-      showToast('已成功总结最近24小时对话并整合至内存卡片及文本框！', 'success');
+      showToast('已成功总结最近24小时对话并生成记忆卡片！', 'success');
     } catch (err: any) {
       console.error('Failed to summarize 24h chat:', err);
       showToast(err?.message || '总结生成失败，请检查 API Key 配置。', 'error');
@@ -111,7 +105,7 @@ export const LongTermMemoryModal: React.FC<LongTermMemoryModalProps> = ({
     setDeleteEntryId(id);
   };
 
-  // Add manual entry
+  // Add manual entry (stored strictly in memoryEntries, not inside character background)
   const handleAddManualEntry = () => {
     if (!manualText.trim()) return;
     const dateStr = manualDate || new Date().toISOString().split('T')[0];
@@ -123,28 +117,9 @@ export const LongTermMemoryModal: React.FC<LongTermMemoryModalProps> = ({
     };
     setMemoryEntries([newEntry, ...memoryEntries]);
 
-    // Append to backdrop memory
-    const formattedAppend = `\n📅 [${dateStr} 记忆]: ${manualText.trim()}`;
-    setBackdropMemory(prev => prev.trim() ? `${prev.trim()}${formattedAppend}` : `📅 [${dateStr} 记忆]: ${manualText.trim()}`);
-
     setManualText('');
     setShowAddManual(false);
     showToast('手动记忆卡片添加成功', 'success');
-  };
-
-  // Re-sync all valid cards into memory text box
-  const handleResyncCardsToText = () => {
-    const validCards = memoryEntries.filter(e => isEntryValid(e.timestamp));
-    if (validCards.length === 0) {
-      showToast('当前暂无有效卡片可供重构。', 'info');
-      return;
-    }
-    let resynced = backdropMemory.split(/\n📅 \[.*?记忆.*?\]:.*/g).join('').trim();
-    validCards.forEach(c => {
-      resynced += `\n📅 [${c.date} 记忆卡片]: ${c.summary}`;
-    });
-    setBackdropMemory(resynced.trim());
-    showToast('已将当前所有有效卡片追加同步至下方背景文本框！', 'success');
   };
 
   // Purge expired cards
@@ -155,14 +130,14 @@ export const LongTermMemoryModal: React.FC<LongTermMemoryModalProps> = ({
     showToast(`已清理 ${removedCount} 条过期的记忆卡片。`, 'info');
   };
 
-  // Submit and Save
+  // Submit and Save - ensures character background (session.memory) is clean of memory cards
   const handleSaveModal = async () => {
     const updatedSession: ChatSession = {
       ...session,
       longTermMemoryEnabled: enabled,
       memoryRetentionDays: retentionDays,
       memoryEntries: memoryEntries,
-      memory: backdropMemory
+      memory: cleanBackgroundText(session.memory || '')
     };
 
     await onSave(updatedSession);

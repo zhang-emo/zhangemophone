@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { ChatSession, ChatMessage, MemoryEntry } from '../lib/types';
 import { dbInstance } from '../lib/db';
-import { generateAiReply, getSystemMemoryPrompt, generate24HourMemorySummary } from '../lib/api';
+import { generateAiReply, getSystemMemoryPrompt, generate24HourMemorySummary, cleanBackgroundText } from '../lib/api';
 import { OfflineScenarioModal } from './OfflineScenarioModal';
 
 interface OfflineChatWindowProps {
@@ -119,15 +119,11 @@ export const OfflineChatWindow: React.FC<OfflineChatWindowProps> = ({
             };
 
             const updatedEntries = [newEntry, ...(currentSession.memoryEntries || [])];
-            const formattedAppend = `\n📅 [${todayStr} 线下模式总结]: ${summaryText}`;
-            const updatedBackdrop = currentSession.memory?.trim() 
-              ? `${currentSession.memory.trim()}${formattedAppend}` 
-              : `📅 [${todayStr} 线下模式总结]: ${summaryText}`;
 
             const updatedSession: ChatSession = {
               ...currentSession,
               memoryEntries: updatedEntries,
-              memory: updatedBackdrop
+              memory: cleanBackgroundText(currentSession.memory || '')
             };
 
             await onSaveSession(updatedSession);

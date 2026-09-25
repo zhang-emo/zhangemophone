@@ -215,13 +215,19 @@ export function getUserProfilePrompt(): string {
 
 export function cleanBackgroundText(text: string): string {
   if (!text) return '';
-  if (text.startsWith('你叫') && text.includes('身份背景是')) {
-    const bgMatch = text.match(/身份背景是\s*([\s\S]*?)(?=\x20*。(?:你对用户的看法|你的耐心值|你与用户的关系|请始终)|$)/);
+  let cleaned = text;
+  if (cleaned.startsWith('你叫') && cleaned.includes('身份背景是')) {
+    const bgMatch = cleaned.match(/身份背景是\s*([\s\S]*?)(?=\x20*。(?:你对用户的看法|你的耐心值|你与用户的关系|请始终)|$)/);
     if (bgMatch && bgMatch[1]) {
-      return bgMatch[1].trim();
+      cleaned = bgMatch[1].trim();
     }
   }
-  return text;
+  // Strip out any appended date memory cards or summary cards that previously leaked into background text
+  cleaned = cleaned
+    .replace(/(?:\r?\n)?(?:📅\s*)?\[\d{4}[-/.]\d{1,2}[-/.]\d{1,2}[^\]]*\]:[^\n]*/g, '')
+    .replace(/(?:\r?\n)?📅\s*\[[^\]]*(?:记忆|总结)[^\]]*\]:[^\n]*/g, '')
+    .trim();
+  return cleaned;
 }
 
 export function getSystemMemoryPrompt(session: {
