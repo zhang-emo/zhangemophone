@@ -1226,17 +1226,6 @@ ${currentSession.outline}
               </>
             )}
 
-            <button
-              type="button"
-              onClick={() => {
-                setIsCreating(true);
-                setShowSidebar(false);
-              }}
-              className="h-8 w-8 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-600 hover:bg-indigo-100 shadow-sm transition-all cursor-pointer flex items-center justify-center shrink-0"
-              title="构建新文游"
-            >
-              <Plus size={16} className="stroke-[2.5]" />
-            </button>
 
             <button
               type="button"
@@ -1640,20 +1629,12 @@ ${currentSession.outline}
               </div>
 
               {/* Pinned Action Footer */}
-              <div className="p-4 border-t border-slate-100 bg-white flex items-center space-x-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleCloseCreatingModal}
-                  disabled={isGenerating}
-                  className="py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer shrink-0"
-                >
-                  取消
-                </button>
+              <div className="p-4 border-t border-slate-100 bg-white flex items-center shrink-0">
                 <button
                   type="button"
                   onClick={handleStartGame}
                   disabled={isGenerating}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-600 text-white font-black text-xs shadow-md shadow-indigo-200 transition-all active:scale-[0.98] disabled:opacity-50 disabled:scale-100 flex items-center justify-center space-x-1.5 cursor-pointer"
+                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-600 text-white font-black text-xs shadow-md shadow-indigo-200 transition-all active:scale-[0.98] disabled:opacity-50 disabled:scale-100 flex items-center justify-center space-x-1.5 cursor-pointer"
                 >
                   {isGenerating ? (
                     <>
