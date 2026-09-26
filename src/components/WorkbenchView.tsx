@@ -515,7 +515,7 @@ ${liveOutline || "（目前为空，等待策划）"}
     }
 
     if (format === 'txt') {
-      const blob = new Blob([liveOutline], { type: 'text/plain;charset=utf-8' });
+      const blob = new Blob(['\uFEFF' + liveOutline], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

@@ -377,7 +377,7 @@ export default function AiAdventureGame({
         setFileType('text');
         const reader = new FileReader();
         reader.onload = (event) => {
-          const textContent = (event.target?.result as string).trim();
+          const textContent = ((event.target?.result as string) || '').replace(/^\uFEFF/, '').trim();
           if (!textContent) {
             setUploadError('TXT文件为空。');
           } else {
@@ -537,7 +537,8 @@ export default function AiAdventureGame({
       });
 
       const fullStoryText = lines.join('\n');
-      const blob = new Blob([fullStoryText], { type: 'text/plain;charset=utf-8' });
+      // Add UTF-8 BOM (\uFEFF) to prevent garbled text/mojibake when opened in Windows Notepad or other text editors
+      const blob = new Blob(['\uFEFF' + fullStoryText], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const safeTitle = session.title.replace(/[/\\?%*:|"<>]/g, '_') || '文游故事';
