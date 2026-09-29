@@ -1536,14 +1536,56 @@ ${conversationHistory}
 }
 
 /**
- * Clean memory item text to remove any legacy lock emojis or formatting artifacts
+ * Sanitize and translate common English RPG terms, tags, status and favor patterns to clean Chinese
+ */
+export function sanitizeMemoryText(str?: string | null): string {
+  if (!str) return '';
+  return str
+    // Standardize brackets & prefixes
+    .replace(/\[\s*(?:Main[-\s]?Quest|MainQuest)\s*\]/gi, '[主线-进行中]')
+    .replace(/\[\s*(?:Side[-\s]?Quest|SideQuest)\s*\]/gi, '[支线-进行中]')
+    .replace(/\[\s*(?:Player|Protagonist)\s*\]/gi, '[主角]')
+    .replace(/\[\s*(?:NPC|Character)\s*:\s*([^\]]+)\]/gi, '[NPC:$1]')
+    .replace(/\[\s*(?:Key[-\s]?Clue|Clue)\s*\]/gi, '[关键线索]')
+    .replace(/\[\s*(?:Major[-\s]?Event|MajorEvent|Event|Chronicle)\s*\]/gi, '[大事件]')
+    .replace(/\[\s*(?:Player[-\s]?Motivation|Motivation)\s*\]/gi, '[玩家动机]')
+    // Common RPG attributes and status phrases
+    .replace(/([^\s,;]+)'s\s*favor\s*(?:hit|reached|is|=)\s*(\d+)/gi, '$1的好感度达到 $2')
+    .replace(/([^\s,;]+)'s\s*favor/gi, '$1的好感度')
+    .replace(/\bfavor\s*(?:hit|reached|is|=)\s*(\d+)/gi, '好感度达到 $1')
+    .replace(/\bfavor\b/gi, '好感度')
+    .replace(/\bstatus\s*:\s*/gi, '状态: ')
+    .replace(/\bstatus\b/gi, '状态')
+    .replace(/\blocation\s*:\s*/gi, '位于: ')
+    .replace(/\blocation\b/gi, '位置')
+    .replace(/\bactive\b/gi, '进行中')
+    .replace(/\bcompleted\b/gi, '已完成')
+    .replace(/\bin\s*progress\b/gi, '进行中')
+    .replace(/\bhealthy\b/gi, '健康')
+    .replace(/\balive\b/gi, '存活')
+    .replace(/\bdead\b/gi, '死亡')
+    .replace(/\bwounded\b|\binjured\b/gi, '负伤')
+    .replace(/\bfriendly\b/gi, '友善')
+    .replace(/\bhostile\b/gi, '敌对')
+    .replace(/\bneutral\b/gi, '中立')
+    .replace(/\bunknown\b/gi, '未知')
+    .replace(/\bequipped\s*(?:with)?\s*:\s*/gi, '装备: ')
+    .replace(/\bequipment\s*:\s*/gi, '装备: ')
+    .replace(/\binventory\s*:\s*/gi, '持有物: ')
+    .trim();
+}
+
+/**
+ * Clean memory item text to remove any legacy lock emojis or formatting artifacts,
+ * and translate common English RPG syntax to pure Chinese.
  */
 export function cleanMemoryItemText(text?: string | null): string {
   if (!text) return '';
-  return text
+  const noLock = text
     .replace(/^[🔒🔓\s]+/, '')
     .replace(/\s*[🔒🔓]\s*/g, ' ')
     .trim();
+  return sanitizeMemoryText(noLock);
 }
 
 /**
@@ -1701,8 +1743,8 @@ ${recentHistoryStr || '游戏刚开始。'}
    - 记录已经发生的、具有重大转折意义或因果锁定的历史事实。
    - 格式规范：[大事件] 简明描述已发生的大事件及不可逆结果。
 
-【重要约束】：
-- 【强制全中文输出】：所有提炼出的记忆条目必须严格使用纯正、自然的简体中文！严禁夹杂任何英文词汇、英文句式或语法缩写（例如严禁输出 "favor"、"hit"、"'s"、"quest"、"status"、"level" 等，必须准确转化为中文，如“好感度达到...”、“诺顿的好感度”等）。
+【重要约束（最高优先级铁律）】：
+- 【强制 100% 简体中文与全面汉化翻译】：所有提炼出的记忆条目必须严格使用纯正、地道的简体中文！绝对严禁夹杂任何英文词汇、英文字段、英文标签或语法缩写。若设定或对话中包含英文人名、地名、物品名、技能名或剧情，必须翻译或音译为中文（例如严禁输出 "favor"、"hit"、"'s"、"quest"、"status"、"level"、"Riverwood" 等，必须准确转化为中文，如“好感度达到...”、“溪木镇”等）。严禁输出英文标签如 [Main-Quest]、[Player]、[NPC:... Status:...]，必须一律使用标准中文标签：[主线-进行中]、[支线-进行中]、[主角]、[NPC:名字]、[关键线索]、[玩家动机]、[大事件]！
 - 【锁定条目绝对保护】：玩家已锁定的核心条目，【绝对不允许删除或修改】，必须一字不差原样保留！
 - 【纯净文本】：不要在条目文字中输出 🔒、🔓 等锁符号 emoji，系统界面有独立的矢量锁控件进行管理。
 - 拒绝琐碎日常废话，只保留影响后续剧情走向和逻辑因果的核心事实！
@@ -1806,7 +1848,7 @@ ${recentHistoryStr || '游戏刚开始。'}
       try {
         const testArr = JSON.parse(`[${innerStr}]`);
         if (Array.isArray(testArr) && testArr.length > 0) {
-          return testArr.map(String).filter(s => s.trim().length > 0);
+          return testArr.map(String).map(cleanMemoryItemText).filter(s => s.trim().length > 0);
         }
       } catch (e) {}
 
@@ -1816,7 +1858,7 @@ ${recentHistoryStr || '游戏刚开始。'}
       }
       
       return items
-        .map(s => s.replace(/^[🔒\s\-*•、()（）\[\]【】]+/, '').replace(/^\d+[\.\s、\)\-—]+/, '').replace(/^"|"$|\[|\]/g, '').replace(/,$/, '').replace(/^"|"$|\[|\]/g, '').trim())
+        .map(s => cleanMemoryItemText(s.replace(/^[🔒\s\-*•、()（）\[\]【】]+/, '').replace(/^\d+[\.\s、\)\-—]+/, '').replace(/^"|"$|\[|\]/g, '').replace(/,$/, '').replace(/^"|"$|\[|\]/g, '').trim()))
         .filter(s => s.length > 1 && !s.startsWith('{') && !s.startsWith('['));
     };
 
@@ -1846,12 +1888,14 @@ ${recentHistoryStr || '游戏刚开始。'}
         } else if (/重大编年史|重大事件|majorChronicles|major_chronicles|编年史/i.test(trimmed)) {
           currentSection = 'majorChronicles';
         } else if (currentSection) {
-          let cleaned = trimmed
-            .replace(/^[-*•\d+.\s、()（）]+/, '')
-            .replace(/^"|"$/g, '')
-            .replace(/,$/, '')
-            .replace(/^"|"$/g, '')
-            .trim();
+          let cleaned = cleanMemoryItemText(
+            trimmed
+              .replace(/^[-*•\d+.\s、()（）]+/, '')
+              .replace(/^"|"$/g, '')
+              .replace(/,$/, '')
+              .replace(/^"|"$/g, '')
+              .trim()
+          );
 
           if (cleaned.length > 1 && !cleaned.startsWith('{') && !cleaned.startsWith('}') && !cleaned.startsWith('[') && !cleaned.startsWith(']')) {
             resultObj[currentSection].push(cleaned);
@@ -1869,19 +1913,6 @@ ${recentHistoryStr || '游戏刚开始。'}
     return null;
   };
 
-  const sanitizeMemoryText = (str: string): string => {
-    if (!str) return '';
-    return str
-      .replace(/([^\s,;]+)'s\s*favor\s*(?:hit|reached|is|=)\s*(\d+)/gi, '$1的好感度达到 $2')
-      .replace(/([^\s,;]+)'s\s*favor/gi, '$1的好感度')
-      .replace(/\bfavor\s*(?:hit|reached|is|=)\s*(\d+)/gi, '好感度达到 $1')
-      .replace(/\bfavor\b/gi, '好感度')
-      .replace(/\bstatus\b/gi, '状态')
-      .replace(/\bactive\b/gi, '进行中')
-      .replace(/\bcompleted\b/gi, '已完成')
-      .trim();
-  };
-
   const getArrayFromParsed = (parsed: any, keys: string[]): string[] | null => {
     if (!parsed || typeof parsed !== 'object') return null;
     for (const key of keys) {
@@ -1889,13 +1920,13 @@ ${recentHistoryStr || '游戏刚开始。'}
       if (Array.isArray(val) && val.length > 0) {
         return val
           .map((item: any) => typeof item === 'string' ? item : (item.name ? `${item.name}: ${item.state || item.desc || item.status || ''}` : JSON.stringify(item)))
-          .map((s: string) => sanitizeMemoryText(s.trim()))
+          .map((s: string) => cleanMemoryItemText(s.trim()))
           .filter(Boolean);
       }
       if (typeof val === 'string' && val.trim().length > 0) {
         const splitLines = val.split('\n')
           .map(l => l.replace(/^[🔒\s\-*•、()（）\[\]【】]+/, '').replace(/^\d+[\.\s、\)\-—]+/, '').replace(/^"|"$/g, '').trim())
-          .map(l => sanitizeMemoryText(l))
+          .map(l => cleanMemoryItemText(l))
           .filter(l => l.length > 1);
         if (splitLines.length > 0) {
           return splitLines;
@@ -2047,8 +2078,14 @@ ${recentHistoryStr || '游戏刚开始。'}
 
       const bodyData = {
         model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
+        messages: [
+          {
+            role: 'system',
+            content: '你是一个专业文游 GM 核心记忆提炼专家。你必须严格使用 100% 纯正简体中文提取和总结记忆。绝对严禁输出任何英文词汇、英文字段或英文句式，即使输入中包含英文也必须全部翻译为中文。输出纯 JSON 格式。'
+          },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.6,
         max_tokens: 4000
       };
 
@@ -2075,7 +2112,8 @@ ${recentHistoryStr || '游戏刚开始。'}
           model: 'gemini-3.8-flash',
           contents: prompt,
           config: {
-            temperature: 0.7
+            temperature: 0.6,
+            systemInstruction: '你是一个专业文游 GM 核心记忆提炼专家。你必须严格使用 100% 纯正简体中文提取和总结记忆。绝对严禁输出任何英文词汇、英文字段或英文句式，即使输入中包含英文也必须全部翻译为中文。输出纯 JSON 格式。'
           }
         }),
         35000,
