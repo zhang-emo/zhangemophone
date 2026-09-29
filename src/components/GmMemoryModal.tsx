@@ -63,13 +63,26 @@ export default function GmMemoryModal({
   const handleExtractClick = async () => {
     if (isExtracting) return;
     try {
-      const result = await onAutoExtract(localMemory);
+      const currentValid = sanitizeAndMigrateGmMemory({ ...memory, ...localMemory });
+      onSave(currentValid);
+      const result = await onAutoExtract(currentValid);
       if (result) {
-        setLocalMemory(sanitizeAndMigrateGmMemory(result));
+        const migrated = sanitizeAndMigrateGmMemory(result);
+        setLocalMemory(migrated);
+        onSave(migrated);
       }
     } catch (e) {
       console.error('Extract click error:', e);
     }
+  };
+
+  const handleClose = () => {
+    const finalMergedMemory: GmAdventureMemory = sanitizeAndMigrateGmMemory({
+      ...memory,
+      ...localMemory
+    });
+    onSave(finalMergedMemory);
+    onClose();
   };
 
   if (!isOpen) return null;
@@ -85,23 +98,26 @@ export default function GmMemoryModal({
       ? currentLocked.filter(t => t !== clean)
       : [...currentLocked, clean];
 
-    setLocalMemory({
+    const updated = sanitizeAndMigrateGmMemory({
       ...localMemory,
       lockedItems: updatedLocked
     });
+    setLocalMemory(updated);
+    onSave(updated);
   };
 
   const handleAddItem = () => {
     const text = cleanMemoryItemText(newItemText);
     if (!text) return;
-    // Defaults to unlocked per user specification
-    const updated = {
+    // Add item and immediately persist so user never loses their newly written entry
+    const updated = sanitizeAndMigrateGmMemory({
       ...localMemory,
       [activeTab]: [...(localMemory[activeTab] || []), text],
       lockedItems: [...(localMemory.lockedItems || [])]
-    };
+    });
     setLocalMemory(updated);
     setNewItemText('');
+    onSave(updated);
   };
 
   const confirmDeleteItem = () => {
@@ -110,16 +126,17 @@ export default function GmMemoryModal({
     const cleanDelete = cleanMemoryItemText(textToDelete);
     const updatedList = currentList.filter((_, idx) => idx !== itemToDeleteIndex);
     const updatedLocked = (localMemory.lockedItems || []).filter(t => t !== cleanDelete);
-    const updated = {
+    const updated = sanitizeAndMigrateGmMemory({
       ...localMemory,
       [activeTab]: updatedList,
       lockedItems: updatedLocked
-    };
+    });
     setLocalMemory(updated);
     if (editingIndex === itemToDeleteIndex) {
       setEditingIndex(null);
     }
     setItemToDeleteIndex(null);
+    onSave(updated);
   };
 
   const handleStartEdit = (index: number, text: string) => {
@@ -143,13 +160,14 @@ export default function GmMemoryModal({
 
     const updatedList = [...currentList];
     updatedList[index] = newText;
-    const updated = {
+    const updated = sanitizeAndMigrateGmMemory({
       ...localMemory,
       [activeTab]: updatedList,
       lockedItems: updatedLocked
-    };
+    });
     setLocalMemory(updated);
     setEditingIndex(null);
+    onSave(updated);
   };
 
   const handleSaveAll = () => {
@@ -243,7 +261,7 @@ export default function GmMemoryModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
           >
             <X size={16} />

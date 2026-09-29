@@ -285,7 +285,7 @@ export default function AiAdventureGame({
         JSON.stringify(extracted.majorChronicles) === JSON.stringify(baseMemory.majorChronicles);
       saveMemoryToLocal(activeSessionId, extracted);
       if (isIdentical) {
-        showToast('警告：模型是个复读机，原样返回了旧记忆，请继续推进剧情或重试！', 'error');
+        showToast('[GM 记忆库核对完毕：剧情事实保持一致，已有设定完好保留]');
       } else {
         showToast('[GM 记忆库已同步最新剧情事实]');
       }

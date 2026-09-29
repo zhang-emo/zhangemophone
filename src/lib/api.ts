@@ -1740,7 +1740,7 @@ export async function extractGmAdventureMemory(
   const recentHistoryStr = history.slice(-30).map(m => `${m.role === 'user' ? '玩家' : 'GM'}: ${cleanTextForPrompt(m.content)}`).join('\n\n');
 
   const prompt = `你是一个专业文游（跑团/TRPG）的 GM 核心记忆提炼专家。
-你的核心任务是分析游戏大纲、当前对话剧情演进以及已有的 GM 记忆库，提炼出【最关键、最准确】的记忆，进行增量更新、状态演进与淘汰合并。
+你的核心任务是分析游戏大纲、当前对话剧情演进以及已有的 GM 记忆库，提炼出【最关键、最准确】的记忆，进行增量更新、状态演进与持续维护。
 
 【游戏大纲设定】：
 ${outline}
@@ -1766,34 +1766,35 @@ ${recentHistoryStr || '游戏刚开始。'}
      * [支线-进行中] 支线目标与触发来源
      * [玩家动机] 玩家主动声明的近期行动方向
      * [关键线索] 待查明或正在验证的重要线索
-   - 【淘汰更新】：已彻底完成或过时的任务（未锁定的），必须从 activeQuests 中剔除，转化为 majorChronicles 或删除。
+   - 【继承与更新】：已有进行中的任务必须完整继承！若近期剧情有了推进阶段，更新其描述；若触发新任务，新增一条；严禁无故丢弃已有任务！只有彻底解决或结案的任务才可转入编年史或替换。
 
 2. characterStates (角色与NPC状态 - 容量 8~12 条)：
+   - 【继承与更新】：已有角色如果未在近期对话中登场，绝不可删除，必须原样保留！
    - 记录主角及当前有深度互动核心 NPC 的实时状态。
    - 格式规范：
      * [主角] 当前生命/伤情/核心装备/所处位置
      * [NPC:名字] 身份、存活状态、对主角态度/好感、当前所处位置
 
 3. worldRules (世界法则与铁律 - 精简保留，容量 5~8 条)：
-   - 只记录不可违背的底层物理、魔法规则与世界禁忌，避免塞入普通琐碎常识。
+   - 底层客观法则绝不可轻易删除！必须完整继承已有记忆库中的所有法则条目，仅在近期剧情明确揭示新的世界法则或底层禁忌时追加新条目。
 
 4. majorChronicles (重大编年史 - 容量 10~15 条)：
-   - 记录已经发生的、具有重大转折意义或因果锁定的历史事实。
+   - 历史具有不可逆累积性！必须完整保留已发生的大事件，并在近期剧情发生重大转折、击败强敌或达成里程碑时追加新事件。
    - 格式规范：[大事件] 简明描述已发生的大事件及不可逆结果。
 
-【重要约束（最高优先级铁律）】：
+【重要约束（最高优先级铁律，绝对必须遵守）】：
+- 【绝不可清空已有记忆】：输出的 JSON 是该世界【完整的全局记忆库】。已有记忆库中的有效条目必须完整包含在输出中，绝不可输出空数组，也绝对禁止无故把之前已写好的条目删光！
 - 【强制 100% 简体中文与全面汉化翻译】：所有提炼出的记忆条目必须严格使用纯正、地道的简体中文！绝对严禁夹杂任何英文词汇、英文字段、英文标签或语法缩写。若设定或对话中包含英文人名、地名、物品名、技能名或剧情，必须翻译或音译为中文（例如严禁输出 "favor"、"hit"、"'s"、"quest"、"status"、"level"、"Riverwood" 等，必须准确转化为中文，如“好感度达到...”、“溪木镇”等）。严禁输出英文标签如 [Main-Quest]、[Player]、[NPC:... Status:...]，必须一律使用标准中文标签：[主线-进行中]、[支线-进行中]、[主角]、[NPC:名字]、[关键线索]、[玩家动机]、[大事件]！
-- 【锁定条目绝对保护】：玩家已锁定的核心条目，【绝对不允许删除或修改】，必须一字不差原样保留！
+- 【锁定条目绝对保护】：玩家已锁定的核心条目（见上文锁定列表），绝对不允许删除或修改，必须一字不差原样保留！
 - 【纯净文本】：不要在条目文字中输出 🔒、🔓 等锁符号 emoji，系统界面有独立的矢量锁控件进行管理。
 - 拒绝琐碎日常废话，只保留影响后续剧情走向和逻辑因果的核心事实！
-- 总条目数严格控制在 35~50 条以内，保证记忆高浓度、高准确度。
-- 【先思考后输出】：先用 <thought>...</thought> 思考近期有哪些新任务、新角色动态及需要淘汰的旧任务，然后输出标准的 JSON 代码块：
+- 【输出格式】：请直接输出包含这四个分类完整列表的合法 JSON 代码块：
 \`\`\`json
 {
-  "worldRules": ["底层规则1...", "规则2..."],
-  "characterStates": ["[主角] 状态良好，持有生锈铁剑，位于溪木镇", "[NPC:阿尔沃] 镇上铁匠，对主角友善"],
-  "activeQuests": ["[主线-进行中] 前往龙临堡向领主报告龙袭消息", "[玩家动机] 寻找铁匠铺修复佩剑", "[关键线索] 废墟发现龙语石板碎屑"],
-  "majorChronicles": ["[大事件] 成功从海尔根龙灾中生还"]
+  "worldRules": ["世界法则条目..."],
+  "characterStates": ["[主角] 状态...", "[NPC:名字] 状态..."],
+  "activeQuests": ["[主线-进行中] ...", "[玩家动机] ..."],
+  "majorChronicles": ["[大事件] ..."]
 }
 \`\`\``;
 
@@ -1804,7 +1805,11 @@ ${recentHistoryStr || '游戏刚开始。'}
     if (!rawText || !rawText.trim()) return null;
     
     // 移除思考过程块，防止其中包含的大括号或特定格式毒化后续的 JSON 和正则解析
-    rawText = rawText.replace(/<(?:thought|think|thinking)>[\s\S]*?<\/(?:thought|think|thinking)>/gi, '').trim();
+    let stripped = rawText.replace(/<(?:thought|think|thinking)>[\s\S]*?<\/(?:thought|think|thinking)>/gi, '').trim();
+    if (!stripped.includes('{')) {
+      // If thought tags stripped the entire output or wrapped the json, preserve rawText
+      stripped = rawText;
+    }
 
     const tryParse = (str: string) => {
       try {
@@ -1821,18 +1826,18 @@ ${recentHistoryStr || '游戏刚开始。'}
       return s;
     };
 
-        // Find the LAST code block if multiple exist
-    let candidateText = rawText;
-    const codeBlocks = [...rawText.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)];
+    // Find the LAST code block if multiple exist
+    let candidateText = stripped;
+    const codeBlocks = [...stripped.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)];
     if (codeBlocks.length > 0) {
       candidateText = codeBlocks[codeBlocks.length - 1][1];
     } else {
-      const lastBrace = rawText.lastIndexOf('}');
+      const lastBrace = stripped.lastIndexOf('}');
       if (lastBrace !== -1) {
         let bestCandidate = null;
-        for (let i = 0; i < rawText.length; i++) {
-          if (rawText[i] === '{') {
-            const potentialBlock = rawText.substring(i, lastBrace + 1);
+        for (let i = 0; i < stripped.length; i++) {
+          if (stripped[i] === '{') {
+            const potentialBlock = stripped.substring(i, lastBrace + 1);
             if (tryParse(potentialBlock) || tryParse(repairJson(potentialBlock))) {
               bestCandidate = potentialBlock;
             }
@@ -1848,10 +1853,10 @@ ${recentHistoryStr || '游戏刚开始。'}
     let directObj = tryParse(cleanCodeBlock) || tryParse(repairJson(cleanCodeBlock));
       
     if (!directObj) {
-      const firstBrace = rawText.indexOf('{');
-      const lastBrace = rawText.lastIndexOf('}');
+      const firstBrace = stripped.indexOf('{');
+      const lastBrace = stripped.lastIndexOf('}');
       if (firstBrace !== -1 && lastBrace > firstBrace) {
-        const candidate = rawText.substring(firstBrace, lastBrace + 1);
+        const candidate = stripped.substring(firstBrace, lastBrace + 1);
         directObj = tryParse(candidate) || tryParse(repairJson(candidate));
       }
     }
@@ -1876,7 +1881,7 @@ ${recentHistoryStr || '游戏刚开始。'}
       // Use a global version of the regex to find all matches, and pick the LAST one
       const flags = keyRegex.flags.includes('g') ? keyRegex.flags : `${keyRegex.flags}g`;
       const globalRegex = new RegExp(keyRegex.source, flags);
-      const matches = [...rawText.matchAll(globalRegex)];
+      const matches = [...stripped.matchAll(globalRegex)];
       if (matches.length === 0) return [];
       
       const lastMatch = matches[matches.length - 1];
@@ -1910,7 +1915,7 @@ ${recentHistoryStr || '游戏刚开始。'}
     }
 
     try {
-      const lines = rawText.split('\n');
+      const lines = stripped.split('\n');
       let currentSection: string | null = null;
 
       for (const line of lines) {
@@ -1975,39 +1980,63 @@ ${recentHistoryStr || '游戏刚开始。'}
   };
 
   /**
-   * Deterministic lock protection & deduplication merge helper with capacity bounds.
-   * Guarantees that any existing items locked by the player are NEVER deleted or overwritten by AI extraction.
-   * Capped to max capacity to maintain token efficiency and focus.
+   * Deterministic lock protection & incremental merge helper with entity awareness.
+   * Guarantees that:
+   * 1. Existing items written or saved by the player are NEVER arbitrarily deleted or cleared.
+   * 2. Any item locked by the player is 100% immune to modification or deletion.
+   * 3. Character states evolve gracefully (e.g. updated status for [主角] or [NPC:Name] updates the unlocked state, while unmentioned NPCs remain safely in memory).
+   * 4. Quests and chronicles are cumulatively maintained instead of wiped clean.
    */
   const mergeAndPreserveLockedItems = (
     extractedItems: string[] | null,
     existingItems: string[] | undefined,
     defaultFallback: string[],
-    maxCapacity: number = 15
+    maxCapacity: number = 15,
+    categoryType: 'worldRules' | 'characterStates' | 'activeQuests' | 'majorChronicles' = 'activeQuests'
   ): string[] => {
-    const existing = existingItems || [];
-    const extracted = extractedItems || [];
+    const existing = (existingItems || []).map(cleanMemoryItemText).filter(Boolean);
+    const extracted = (extractedItems || []).map(cleanMemoryItemText).filter(Boolean);
 
     // Identify all locked items from existing memory in this category
     const lockedInCategory: string[] = [];
+    const unlockedExisting: string[] = [];
     for (const item of existing) {
-      const clean = cleanMemoryItemText(item);
-      if (!clean) continue;
-      if (allLockedItems.has(clean) || item.includes('🔒')) {
-        lockedInCategory.push(clean);
-        allLockedItems.add(clean);
+      if (allLockedItems.has(item) || item.includes('🔒')) {
+        lockedInCategory.push(item);
+        allLockedItems.add(item);
+      } else {
+        unlockedExisting.push(item);
       }
     }
 
+    // If AI extraction returned nothing or empty array for this category:
+    // Fall back to keeping ALL existing items (never wipe the user's memory!)
     if (extracted.length === 0) {
-      return existing.length > 0 ? existing.map(cleanMemoryItemText).slice(0, maxCapacity) : defaultFallback;
+      if (existing.length > 0) {
+        return existing.slice(0, maxCapacity);
+      }
+      return defaultFallback;
     }
 
-    // Clean comparison helper to detect duplicates
     const normalizeKey = (str: string) => {
-      return cleanMemoryItemText(str)
+      return str
         .replace(/^\d+[\.\s、\)\-—]+/, '')
-        .trim()
+        .replace(/\s+/g, '')
+        .toLowerCase();
+    };
+
+    const getEntityKey = (str: string): string | null => {
+      const match = str.match(/^\[(主角|NPC:[^\]]+)\]/i) || str.match(/^【(主角|NPC:[^】]+)】/i);
+      if (match) return match[1].toLowerCase().replace(/\s+/g, '');
+      return null;
+    };
+
+    const getQuestKey = (str: string): string => {
+      return str
+        .replace(/^\[(?:主线-进行中|支线-进行中|玩家动机|关键线索|任务)\]/g, '')
+        .replace(/^【(?:主线-进行中|支线-进行中|玩家动机|关键线索|任务)】/g, '')
+        .replace(/^\d+[\.\s、\)\-—]+/, '')
+        .replace(/\s+/g, '')
         .toLowerCase();
     };
 
@@ -2016,28 +2045,130 @@ ${recentHistoryStr || '游戏刚开始。'}
 
     // 1. Mandatory First Priority: Add all locked items from existing memory
     for (const lockedItem of lockedInCategory) {
-      const clean = cleanMemoryItemText(lockedItem);
-      if (!clean) continue;
-      const norm = normalizeKey(clean);
-      if (norm) {
-        seenNormalized.add(norm);
-      }
-      mergedList.push(clean);
+      const norm = normalizeKey(lockedItem);
+      if (norm) seenNormalized.add(norm);
+      mergedList.push(lockedItem);
     }
 
-    // 2. Add extracted items (preserving newly extracted items or updated AI items) up to max capacity
-    for (const extItem of extracted) {
-      if (mergedList.length >= maxCapacity) break;
-      const clean = cleanMemoryItemText(extItem);
-      if (!clean) continue;
-      const norm = normalizeKey(clean);
-      if (!norm) continue;
+    if (categoryType === 'characterStates') {
+      const lockedEntityKeys = new Set<string>();
+      for (const lockedItem of lockedInCategory) {
+        const entKey = getEntityKey(lockedItem);
+        if (entKey) lockedEntityKeys.add(entKey);
+      }
 
-      // If AI outputted a variant of the locked item, skip it because we already kept the pristine locked version
-      if (seenNormalized.has(norm)) continue;
+      const updatedEntityKeys = new Set<string>();
+      // Process extracted items
+      for (const extItem of extracted) {
+        const norm = normalizeKey(extItem);
+        if (seenNormalized.has(norm)) continue;
+        const entKey = getEntityKey(extItem);
+        if (entKey && lockedEntityKeys.has(entKey)) {
+          // Locked entity cannot be modified by AI
+          continue;
+        }
+        seenNormalized.add(norm);
+        if (entKey) updatedEntityKeys.add(entKey);
+        mergedList.push(extItem);
+      }
 
-      seenNormalized.add(norm);
-      mergedList.push(clean);
+      // Preserve existing unlocked characters that were NOT updated in this turn
+      for (const existItem of unlockedExisting) {
+        const norm = normalizeKey(existItem);
+        if (seenNormalized.has(norm)) continue;
+        const entKey = getEntityKey(existItem);
+        if (entKey && updatedEntityKeys.has(entKey)) {
+          // Already updated with newer state from extracted
+          continue;
+        }
+        seenNormalized.add(norm);
+        mergedList.push(existItem);
+      }
+    } else if (categoryType === 'activeQuests') {
+      const lockedQuestKeys = new Set<string>();
+      for (const lockedItem of lockedInCategory) {
+        lockedQuestKeys.add(getQuestKey(lockedItem));
+      }
+
+      const updatedQuestKeys = new Set<string>();
+      for (const extItem of extracted) {
+        const norm = normalizeKey(extItem);
+        if (seenNormalized.has(norm)) continue;
+        const qKey = getQuestKey(extItem);
+        if (qKey && lockedQuestKeys.has(qKey)) {
+          // Locked quest cannot be modified by AI
+          continue;
+        }
+        seenNormalized.add(norm);
+        if (qKey) updatedQuestKeys.add(qKey);
+        mergedList.push(extItem);
+      }
+
+      // Preserve existing unlocked quests that were NOT updated in this turn
+      for (const existItem of unlockedExisting) {
+        const norm = normalizeKey(existItem);
+        if (seenNormalized.has(norm)) continue;
+        const qKey = getQuestKey(existItem);
+        if (qKey && updatedQuestKeys.has(qKey)) {
+          // Already updated with newer stage from extracted
+          continue;
+        }
+        seenNormalized.add(norm);
+        mergedList.push(existItem);
+      }
+    } else if (categoryType === 'worldRules') {
+      // Existing world rules (locked and unlocked) are sacred truths!
+      for (const existItem of unlockedExisting) {
+        const norm = normalizeKey(existItem);
+        if (!seenNormalized.has(norm)) {
+          seenNormalized.add(norm);
+          mergedList.push(existItem);
+        }
+      }
+      // Add any newly discovered rule from extracted
+      for (const extItem of extracted) {
+        const norm = normalizeKey(extItem);
+        if (!seenNormalized.has(norm)) {
+          seenNormalized.add(norm);
+          mergedList.push(extItem);
+        }
+      }
+    } else {
+      // majorChronicles: Cumulative history
+      // Add existing unlocked history first (preserve chronological order)
+      for (const existItem of unlockedExisting) {
+        const norm = normalizeKey(existItem);
+        if (!seenNormalized.has(norm)) {
+          seenNormalized.add(norm);
+          mergedList.push(existItem);
+        }
+      }
+      // Append newly extracted chronicles
+      for (const extItem of extracted) {
+        const norm = normalizeKey(extItem);
+        if (!seenNormalized.has(norm)) {
+          seenNormalized.add(norm);
+          mergedList.push(extItem);
+        }
+      }
+    }
+
+    // Capacity bound: If exceeding maxCapacity, prune oldest UNLOCKED items first
+    if (mergedList.length > maxCapacity) {
+      const lockedSet = new Set(lockedInCategory);
+      const mustKeep: string[] = [];
+      const canPrune: string[] = [];
+      for (const item of mergedList) {
+        if (lockedSet.has(item)) {
+          mustKeep.push(item);
+        } else {
+          canPrune.push(item);
+        }
+      }
+      const allowedPrunedCount = Math.max(0, maxCapacity - mustKeep.length);
+      // Keep newest entries from canPrune
+      const keptPruned = canPrune.slice(-allowedPrunedCount);
+      return [...mustKeep, ...keptPruned];
     }
 
     return mergedList.length > 0 ? mergedList : defaultFallback;
@@ -2061,8 +2192,14 @@ ${recentHistoryStr || '游戏刚开始。'}
       '重大编年史', '编年史', '大事记', '已发生大事件'
     ]);
 
-    // Check if everything fell back
-    if (!extractedWorldRules && !extractedCharStates && !extractedQuests && !extractedChronicles) {
+    // Check if everything fell back and existing memory is also empty
+    const hasAnyExtracted = extractedWorldRules || extractedCharStates || extractedQuests || extractedChronicles;
+    const hasAnyExisting = (sanitizedExisting.worldRules?.length || 0) +
+      (sanitizedExisting.characterStates?.length || 0) +
+      (sanitizedExisting.activeQuests?.length || 0) +
+      (sanitizedExisting.majorChronicles?.length || 0) > 0;
+
+    if (!hasAnyExtracted && !hasAnyExisting) {
        throw new Error("模型完全没有返回任何有效字段。原始返回：\n" + JSON.stringify(parsed).substring(0, 200));
     }
 
@@ -2070,28 +2207,32 @@ ${recentHistoryStr || '游戏刚开始。'}
       extractedWorldRules,
       sanitizedExisting.worldRules,
       ['遵循本剧本世界观的底层物理与魔法规则'],
-      8
+      10,
+      'worldRules'
     );
 
     const characterStates = mergeAndPreserveLockedItems(
       extractedCharStates,
       sanitizedExisting.characterStates,
       ['[主角] 当前状态良好，积极探索剧情中'],
-      12
+      15,
+      'characterStates'
     );
 
     const activeQuests = mergeAndPreserveLockedItems(
       extractedQuests,
       sanitizedExisting.activeQuests,
       ['[主线-进行中] 展开探索与互动，推动剧情发展'],
-      15
+      15,
+      'activeQuests'
     );
 
     const majorChronicles = mergeAndPreserveLockedItems(
       extractedChronicles,
       sanitizedExisting.majorChronicles,
       ['[大事件] 序章：冒险由此开启'],
-      15
+      15,
+      'majorChronicles'
     );
 
     return {
