@@ -27,7 +27,10 @@ import {
   RefreshCw,
   Zap,
   Plus,
-  PenTool
+  PenTool,
+  Lock,
+  Bell,
+  Volume2
 } from 'lucide-react';
 import { dbInstance } from '../lib/db';
 import { ChatSession } from '../lib/types';
@@ -41,6 +44,18 @@ import {
   canBeatLastPlay,
   findBestAIPlay
 } from '../lib/doudizhuEngine';
+import {
+  UNOCard,
+  UNOColorUI,
+  generate108UNODeck,
+  isCardPlayable,
+  drawCardsFromPiles,
+  getNextTurn,
+  COLOR_MAP,
+  aiSelectPlayableCard,
+  aiChooseBestColor,
+  shuffleDeck
+} from '../lib/unoEngine';
 
 // ==========================================
 // TYPES & DATA STRUCTURES
@@ -58,42 +73,13 @@ export interface GameCompanion {
   quote?: string;
 }
 
-// Default Fallback Companions
-export const DEFAULT_COMPANIONS: GameCompanion[] = [
-  {
-    id: 'char_default_1',
-    name: '顾时川',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    persona: '沉稳腹黑，牌技精湛，擅长心理战与算牌。',
-    quote: '这把牌的胜率，在我手里是百分之百。'
-  },
-  {
-    id: 'char_default_2',
-    name: '林予安',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    persona: '傲娇嘴硬，喜欢冒险打大牌，被抓包时会气急败坏。',
-    quote: '哼，别以为我不知道你在想什么！'
-  },
-  {
-    id: 'char_default_3',
-    name: '陆轻言',
-    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
-    persona: '温柔护短，经常在游戏中给主角暗中放水，言语宠溺。',
-    quote: '想出什么就出什么，输了算我的。'
-  }
-];
+// Default Companions (No hardcoded preset NPCs; kept blank if user has no contacts)
+export const DEFAULT_COMPANIONS: GameCompanion[] = [];
 
 // --- UNO Card Definition ---
-export type UNOColor = 'red' | 'blue' | 'green' | 'yellow' | 'wild';
+export type UNOColor = UNOColorUI;
 export type UNOTargetType = 'number' | 'skip' | 'reverse' | 'draw2' | 'wild' | 'wild4';
-
-export interface UNOCard {
-  id: string;
-  color: UNOColor;
-  type: UNOTargetType;
-  value?: number;
-  display: string;
-}
+export type { UNOCard };
 
 export interface InGameMessage {
   id: string;
@@ -122,8 +108,8 @@ function DoudizhuGame({
   triggerCharacterBubble: (id: string, text: string) => void;
   floatingBubbles: { [charId: string]: string };
 }) {
-  const p1 = selectedCompanions[0] || DEFAULT_COMPANIONS[0];
-  const p2 = selectedCompanions[1] || DEFAULT_COMPANIONS[1];
+  const p1 = selectedCompanions[0] || { id: 'comp_p1', name: '陪玩好友1', avatar: '', persona: '', quote: '' };
+  const p2 = selectedCompanions[1] || { id: 'comp_p2', name: '陪玩好友2', avatar: '', persona: '', quote: '' };
 
   const [userHand, setUserHand] = useState<DDZCard[]>([]);
   const [p1Hand, setP1Hand] = useState<DDZCard[]>([]);
@@ -187,34 +173,99 @@ function DoudizhuGame({
     initDoudizhu();
   }, [initDoudizhu]);
 
-  // Bidding Phase
+  // Bidding Phase: strictly conforms to 1-3 point DouDiZhu rules with hand evaluation and redeal on pass
   const handleBid = (score: number) => {
-    const p1Bid = Math.random() > 0.5 ? Math.max(score, 1) + (Math.random() > 0.5 ? 1 : 0) : 0;
-    const p2Bid = Math.random() > 0.5 ? Math.max(p1Bid, score, 1) : 0;
+    // Helper to evaluate hand strength for AI bidding
+    const evaluateBidPower = (hand: DDZCard[]) => {
+      let power = 0;
+      const rankCounts: Record<number, number> = {};
+      hand.forEach(c => {
+        rankCounts[c.rank] = (rankCounts[c.rank] || 0) + 1;
+        if (c.rank === 17) power += 3; // 大王
+        else if (c.rank === 16) power += 2; // 小王
+        else if (c.rank === 15) power += 1.5; // 2
+        else if (c.rank === 14) power += 0.5; // A
+      });
+      // 王炸 or 炸弹
+      if (rankCounts[16] && rankCounts[17]) power += 4;
+      Object.values(rankCounts).forEach(cnt => {
+        if (cnt === 4) power += 3;
+      });
+      return power;
+    };
 
-    const highestBid = Math.max(score, p1Bid, p2Bid);
-    let chosenLandlord = 0;
-    if (highestBid === p2Bid && p2Bid > 0) chosenLandlord = 2;
-    else if (highestBid === p1Bid && p1Bid > 0) chosenLandlord = 1;
-    else if (score > 0) chosenLandlord = 0;
-    else chosenLandlord = Math.floor(Math.random() * 3);
+    let currentHighestBid = 0;
+    let currentLeader = -1; // 0: User, 1: P1, 2: P2
 
+    // 1. User turn (user bids first)
+    if (score > 0) {
+      currentHighestBid = Math.min(score, 3);
+      currentLeader = 0;
+    }
+
+    // If user bids 3 (抢地主), user immediately wins landlord
+    if (currentHighestBid < 3) {
+      // 2. P1 (Left AI) bidding turn
+      const p1Power = evaluateBidPower(p1Hand);
+      let p1Desired = 0;
+      if (p1Power >= 7) p1Desired = 3;
+      else if (p1Power >= 4.5) p1Desired = 2;
+      else if (p1Power >= 2.5) p1Desired = 1;
+
+      // In DouDiZhu, a bid must be strictly greater than currentHighestBid
+      if (p1Desired > currentHighestBid) {
+        currentHighestBid = p1Desired;
+        currentLeader = 1;
+      }
+    }
+
+    if (currentHighestBid < 3) {
+      // 3. P2 (Right AI) bidding turn
+      const p2Power = evaluateBidPower(p2Hand);
+      let p2Desired = 0;
+      if (p2Power >= 7) p2Desired = 3;
+      else if (p2Power >= 4.5) p2Desired = 2;
+      else if (p2Power >= 2.5) p2Desired = 1;
+
+      if (p2Desired > currentHighestBid) {
+        currentHighestBid = p2Desired;
+        currentLeader = 2;
+      }
+    }
+
+    // 4. Check if everyone passed (流局)
+    if (currentHighestBid === 0 || currentLeader === -1) {
+      showToast('三家均不叫地主，本局流局，重新洗牌发牌！');
+      triggerCharacterBubble(p1.id, '手气平平都不叫，本局流局重新洗牌！');
+      triggerCharacterBubble(p2.id, '三家都不叫，洗牌重开！');
+      setTimeout(() => {
+        initDoudizhu();
+      }, 1500);
+      return;
+    }
+
+    // 5. Landlord decided
+    const chosenLandlord = currentLeader;
     setLandlordPlayer(chosenLandlord);
+    setRoundMultiplier(Math.max(1, currentHighestBid));
     setGameStage('playing');
     setCurrentTurn(chosenLandlord);
 
     if (chosenLandlord === 0) {
       setUserHand(prev => sortDDZCards([...prev, ...bottomCards]));
-      triggerCharacterBubble(p1.id, '你抢了地主，准备接受我们两个农民的围剿吧！');
+      triggerCharacterBubble(p1.id, `你叫了${currentHighestBid}分当选地主，准备接受我们两个农民的围剿吧！`);
       triggerCharacterBubble(p2.id, '农民联手，其利断金！');
+      showToast(`你以 ${currentHighestBid} 分当选地主，底牌已加入手牌！`);
     } else if (chosenLandlord === 1) {
       setP1Hand(prev => sortDDZCards([...prev, ...bottomCards]));
-      triggerCharacterBubble(p1.id, '哈哈，底牌归我了！这把让你们看看地主的威严！');
+      triggerCharacterBubble(p1.id, `哈哈，我叫了${currentHighestBid}分成为地主！底牌归我了！`);
       triggerCharacterBubble(p2.id, '我和玩家联手，一定能把你打趴下。');
+      showToast(`${p1.name} 以 ${currentHighestBid} 分成为地主！`);
     } else {
       setP2Hand(prev => sortDDZCards([...prev, ...bottomCards]));
-      triggerCharacterBubble(p2.id, '地主到手！三张底牌很给力，你们小心了！');
+      triggerCharacterBubble(p2.id, `地主到手（${currentHighestBid}分）！三张底牌很给力，你们小心了！`);
       triggerCharacterBubble(p1.id, '地主在右边，玩家我们一起夹击他！');
+      showToast(`${p2.name} 以 ${currentHighestBid} 分成为地主！`);
     }
   };
 
@@ -278,7 +329,7 @@ function DoudizhuGame({
     // Multiply if Bomb or Rocket
     if (parsed.type === 'BOMB' || parsed.type === 'ROCKET') {
       setRoundMultiplier(prev => prev * 2);
-      triggerCharacterBubble(p1.id, parsed.type === 'ROCKET' ? '<Zap size={14} className="inline mr-1" />王炸！！这也太强了！' : '<Zap size={14} className="inline mr-1" />哇！居然有炸弹！');
+      triggerCharacterBubble(p1.id, parsed.type === 'ROCKET' ? '⚡ 王炸！！这也太强了！' : '💣 哇！居然有炸弹！');
       triggerCharacterBubble(p2.id, '倍数翻倍！');
     }
 
@@ -358,6 +409,29 @@ function DoudizhuGame({
 
     return () => clearTimeout(timer);
   }, [currentTurn, gameStage]);
+
+  if (selectedCompanions.length < 2) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 p-6 text-center space-y-4">
+        <div className="w-16 h-16 rounded-3xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-500 shadow-sm">
+          <Users size={32} />
+        </div>
+        <div className="space-y-1.5 max-w-xs">
+          <h3 className="text-sm font-black text-slate-800">联系人列表未添加人设</h3>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            斗地主不设预设陪玩NPC，需在手机通讯录中至少添加 2 位角色人设后方可开启该功能。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onBackToLobby}
+          className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+        >
+          返回游戏大厅
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col justify-between bg-gradient-to-b from-emerald-950 via-emerald-900 to-emerald-950 p-3 select-none relative overflow-hidden">
@@ -494,28 +568,35 @@ function DoudizhuGame({
       <div className="flex flex-col space-y-2 z-10 pt-1">
         <div className="flex justify-center items-center space-x-2 h-10">
           {gameStage === 'bidding' && currentTurn === 0 && (
-            <div className="flex items-center space-x-2 animate-fadeIn">
+            <div className="flex items-center space-x-1.5 animate-fadeIn">
               <button
                 type="button"
                 onClick={() => handleBid(0)}
-                className="px-3.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-xl text-xs shadow-md active:scale-95 cursor-pointer"
+                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-xl text-xs shadow-md active:scale-95 cursor-pointer"
               >
-                不叫
+                不叫 (0分)
               </button>
               <button
                 type="button"
                 onClick={() => handleBid(1)}
-                className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-black rounded-xl text-xs shadow-md active:scale-95 cursor-pointer"
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-xs shadow-md active:scale-95 cursor-pointer"
               >
-                叫地主 (1分)
+                1分
+              </button>
+              <button
+                type="button"
+                onClick={() => handleBid(2)}
+                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs shadow-md active:scale-95 cursor-pointer"
+              >
+                2分
               </button>
               <button
                 type="button"
                 onClick={() => handleBid(3)}
-                className="px-4 py-1.5 bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 font-black rounded-xl text-xs shadow-lg active:scale-95 cursor-pointer flex items-center space-x-1"
+                className="px-3.5 py-1.5 bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 font-black rounded-xl text-xs shadow-lg active:scale-95 cursor-pointer flex items-center space-x-1"
               >
-                <Crown size={14} />
-                <span>抢地主 (3分)</span>
+                <Crown size={13} />
+                <span>3分 (抢地主)</span>
               </button>
             </div>
           )}
@@ -612,8 +693,18 @@ function DoudizhuGame({
               <div className="w-16 h-16 rounded-full bg-amber-500/20 border-2 border-amber-400 mx-auto flex items-center justify-center text-amber-400">
                 <Trophy size={32} />
               </div>
-              <h3 className="text-xl font-black text-amber-400">
-                {winner === 0 || (winner !== landlordPlayer && landlordPlayer !== 0) ? '<Sparkles size={16} className="inline mr-1" />恭喜获得胜利！' : '<AlertTriangle size={16} className="inline mr-1" />本局惜败'}
+              <h3 className="text-xl font-black text-amber-400 flex items-center justify-center space-x-1.5">
+                {winner === 0 || (winner !== landlordPlayer && landlordPlayer !== 0) ? (
+                  <>
+                    <Sparkles size={18} className="inline mr-1 text-amber-300 animate-pulse" />
+                    <span>恭喜获得胜利！</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={18} className="inline mr-1 text-rose-400" />
+                    <span>本局惜败</span>
+                  </>
+                )}
               </h3>
               <p className="text-xs text-gray-300">
                 获胜者: {winner === 0 ? '我' : winner === 1 ? p1.name : p2.name} (
@@ -667,19 +758,29 @@ function UnoGame({
   const companions = useMemo(() => selectedCompanions.slice(0, 3), [selectedCompanions]);
   const [userHand, setUserHand] = useState<UNOCard[]>([]);
   const [compHands, setCompHands] = useState<{ [id: string]: UNOCard[] }>({});
-  const [discardTop, setDiscardTop] = useState<UNOCard>({ id: 'init', color: 'red', type: 'number', value: 7, display: '7' });
+  const [discardTop, setDiscardTop] = useState<UNOCard>({
+    id: 'init',
+    code: 'R7',
+    color: 'red',
+    colorCode: 'R',
+    type: 'number',
+    value: 7,
+    display: '7'
+  });
   const [activeColor, setActiveColor] = useState<UNOColor>('red');
   const [currentTurnIdx, setCurrentTurnIdx] = useState<number>(0);
   const [turnDirection, setTurnDirection] = useState<1 | -1>(1);
   const [showColorPicker, setShowColorPicker] = useState<boolean>(false);
   const [pendingWildCard, setPendingWildCard] = useState<UNOCard | null>(null);
-  const [unoShouted, setUnoShouted] = useState<boolean>(false);
+  const [drawnCardPending, setDrawnCardPending] = useState<UNOCard | null>(null);
+  const [userUnoDeclared, setUserUnoDeclared] = useState<boolean>(false);
   const [winnerName, setWinnerName] = useState<string | null>(null);
   const [gameStage, setGameStage] = useState<'playing' | 'gameover'>('playing');
   const [actionBanner, setActionBanner] = useState<{ text: string; color: string; iconType: string } | null>(null);
 
-  // Remaining draw deck ref
+  // 6. 抽牌堆与弃牌堆（精确维持 108 张牌守恒）
   const deckRef = useRef<UNOCard[]>([]);
+  const discardPileRef = useRef<UNOCard[]>([]);
   const companionsRef = useRef(companions);
   const userHandRef = useRef(userHand);
   const compHandsRef = useRef(compHands);
@@ -700,90 +801,84 @@ function UnoGame({
     setActionBanner({ text, color, iconType });
     setTimeout(() => {
       setActionBanner(prev => (prev?.text === text ? null : prev));
-    }, 2800);
+    }, 3000);
   };
 
-  const getColorName = (c: UNOColor) => {
-    switch (c) {
-      case 'red': return '红色';
-      case 'blue': return '蓝色';
-      case 'green': return '绿色';
-      case 'yellow': return '黄色';
-      default: return '万能色';
-    }
+  const getPlayerName = (playerIdx: number) => {
+    if (playerIdx === 0) return '我';
+    return companions[playerIdx - 1]?.name || '角色';
   };
 
-  const generateFullUNODeck = (): UNOCard[] => {
-    const colors: ('red' | 'blue' | 'green' | 'yellow')[] = ['red', 'blue', 'green', 'yellow'];
-    const deck: UNOCard[] = [];
-    let id = 1;
-
-    colors.forEach(color => {
-      // 0 card (1 per color)
-      deck.push({ id: `u_${id++}`, color, type: 'number', value: 0, display: '0' });
-      // 1-9 cards (2 per color)
-      for (let v = 1; v <= 9; v++) {
-        deck.push({ id: `u_${id++}`, color, type: 'number', value: v, display: String(v) });
-        deck.push({ id: `u_${id++}`, color, type: 'number', value: v, display: String(v) });
-      }
-      // Action cards (2 each per color: Skip, Reverse, Draw 2)
-      for (let i = 0; i < 2; i++) {
-        deck.push({ id: `u_${id++}`, color, type: 'skip', display: '⊘' });
-        deck.push({ id: `u_${id++}`, color, type: 'reverse', display: '⇄' });
-        deck.push({ id: `u_${id++}`, color, type: 'draw2', display: '+2' });
-      }
-    });
-
-    // Wild & Wild Draw 4 cards (4 each)
-    for (let i = 0; i < 4; i++) {
-      deck.push({ id: `u_${id++}`, color: 'wild', type: 'wild', display: '★' });
-      deck.push({ id: `u_${id++}`, color: 'wild', type: 'wild4', display: '+4' });
-    }
-
-    return deck.sort(() => Math.random() - 0.5);
+  // 6. 抽牌堆耗尽处理函数
+  const drawCards = (count: number): UNOCard[] => {
+    const res = drawCardsFromPiles(deckRef.current, discardPileRef.current, count);
+    deckRef.current = res.newDrawPile;
+    discardPileRef.current = res.newDiscardPile;
+    return res.drawn;
   };
 
-  const drawCardsFromDeck = (count: number): UNOCard[] => {
-    if (deckRef.current.length < count) {
-      deckRef.current = [...deckRef.current, ...generateFullUNODeck()];
-    }
-    const drawn = deckRef.current.slice(0, count);
-    deckRef.current = deckRef.current.slice(count);
-    return drawn;
-  };
-
+  // 3. 游戏初始化与发牌 (3.1 发牌 & 3.2 起始牌特殊处理)
   const initUno = useCallback(() => {
-    const freshDeck = generateFullUNODeck();
-    const userCards = freshDeck.slice(0, 7);
-    let cardIdx = 7;
-
+    const fullDeck = generate108UNODeck();
+    const userCards = fullDeck.splice(0, 7);
+    const comps = companionsRef.current;
     const initialCompHands: { [id: string]: UNOCard[] } = {};
-    companionsRef.current.forEach(c => {
-      initialCompHands[c.id] = freshDeck.slice(cardIdx, cardIdx + 7);
-      cardIdx += 7;
+
+    comps.forEach(c => {
+      initialCompHands[c.id] = fullDeck.splice(0, 7);
     });
 
-    // Initial discard top card (must be a number card)
-    let topIndex = cardIdx;
-    while (topIndex < freshDeck.length && freshDeck[topIndex].type !== 'number') {
-      topIndex++;
+    // 3.2 起始牌特殊处理:
+    // 若起始牌为 WILD 或 WILD+4，将其放回抽牌堆，重新洗牌并翻新牌，直到起始牌不是万能牌。
+    let topCard = fullDeck.shift()!;
+    while (topCard.type === 'wild' || topCard.type === 'wild4') {
+      fullDeck.push(topCard);
+      shuffleDeck(fullDeck);
+      topCard = fullDeck.shift()!;
     }
-    const topCard = topIndex < freshDeck.length
-      ? freshDeck[topIndex]
-      : ({ id: 'init', color: 'red', type: 'number', value: 5, display: '5' } as UNOCard);
 
-    freshDeck.splice(topIndex, 1);
-    deckRef.current = freshDeck.slice(cardIdx);
+    const totalPlayers = comps.length + 1;
+    let initialTurn = 0;
+    let initialDir: 1 | -1 = 1;
+    let startingUserHand = [...userCards];
 
-    setUserHand(userCards);
+    // 若起始牌为功能牌：
+    // SKIP：第一个玩家被跳过。
+    // REVERSE：方向反转，由庄家右手边玩家开始。
+    // +2：第一个玩家抽 2 张并跳过。
+    // 若起始牌为数字牌：正常开始。
+    if (topCard.type === 'skip') {
+      initialTurn = getNextTurn(0, 1, totalPlayers, 1);
+      showActionAlert(`起始牌为【跳过牌】！第一位玩家被禁手跳过！`, 'rose', 'skip');
+    } else if (topCard.type === 'reverse') {
+      if (totalPlayers === 2) {
+        initialTurn = 1;
+        showActionAlert(`起始牌为【反转牌】（2人局视为跳过）！第一位玩家被跳过！`, 'indigo', 'reverse');
+      } else {
+        initialDir = -1;
+        initialTurn = getNextTurn(0, -1, totalPlayers, 1);
+        showActionAlert(`起始牌为【反转牌】！出牌方向逆转为逆时针！`, 'indigo', 'reverse');
+      }
+    } else if (topCard.type === 'draw2') {
+      const extraCards = fullDeck.splice(0, 2);
+      startingUserHand.push(...extraCards);
+      initialTurn = getNextTurn(0, 1, totalPlayers, 1);
+      showActionAlert(`起始牌为【+2 罚牌】！第一位玩家摸 2 张牌并被跳过！`, 'amber', 'zap');
+    }
+
+    deckRef.current = fullDeck;
+    discardPileRef.current = [];
+
+    setUserHand(startingUserHand);
     setCompHands(initialCompHands);
     setDiscardTop(topCard);
     setActiveColor(topCard.color);
-    setCurrentTurnIdx(0);
-    setTurnDirection(1);
+    setCurrentTurnIdx(initialTurn);
+    setTurnDirection(initialDir);
     setShowColorPicker(false);
     setPendingWildCard(null);
-    setUnoShouted(false);
+    setDrawnCardPending(null);
+    setUserUnoDeclared(false);
     setWinnerName(null);
     setGameStage('playing');
     setActionBanner(null);
@@ -793,107 +888,120 @@ function UnoGame({
     initUno();
   }, [initUno]);
 
+  // 4. 合法出牌校验（严格包含 WILD+4 不得在持有当前有效颜色牌时出牌的规定）
   const isValidCard = (card: UNOCard) => {
-    if (card.color === 'wild' || card.type === 'wild' || card.type === 'wild4') return true;
-    if (card.color === activeColor) return true;
-    if (card.type === 'number' && discardTop.type === 'number' && card.value === discardTop.value) return true;
-    if (card.type !== 'number' && card.type === discardTop.type) return true;
-    return false;
+    return isCardPlayable(card, discardTop, activeColor, userHand).valid;
   };
 
-  const getPlayerName = (playerIdx: number) => {
-    if (playerIdx === 0) return '我';
-    return companions[playerIdx - 1]?.name || '角色';
-  };
-
-  // Turn calculation with Action Card effects
+  // 5. 牌效果应用与回合流转
   const applyCardEffectsAndAdvance = (playedBy: number, card: UNOCard, chosenColor: UNOColor) => {
     const totalPlayers = companions.length + 1;
     const actorName = getPlayerName(playedBy);
     const dir = turnDirectionRef.current;
 
-    // Normal next player index (step = 1)
-    const directNextIdx = (playedBy + dir + totalPlayers * 2) % totalPlayers;
+    const directNextIdx = getNextTurn(playedBy, dir, totalPlayers, 1);
     const directNextName = getPlayerName(directNextIdx);
 
     if (card.type === 'reverse') {
       if (totalPlayers === 2) {
-        // In 2-player UNO, reverse behaves like skip
-        showActionAlert(`<RefreshCw size={12} className="inline mr-1" />${actorName} 打出【反转卡】！2人局等同于【跳过】，${directNextName} 被跳过！`, 'indigo', 'reverse');
-        const nextIdx = (playedBy + dir * 2 + totalPlayers * 2) % totalPlayers;
+        // 2人局中，反转等同于跳过，当前玩家继续出牌
+        showActionAlert(`${actorName} 打出【反转卡】！2人局等同于【跳过】，${directNextName} 被跳过！`, 'indigo', 'reverse');
+        const nextIdx = getNextTurn(playedBy, dir, totalPlayers, 2);
         setCurrentTurnIdx(nextIdx);
       } else {
         const newDirection = (dir === 1 ? -1 : 1) as 1 | -1;
         setTurnDirection(newDirection);
         turnDirectionRef.current = newDirection;
-        const newNextIdx = (playedBy + newDirection + totalPlayers * 2) % totalPlayers;
-        showActionAlert(`<RefreshCw size={12} className="inline mr-1" />${actorName} 打出【反转卡】！出牌方向变为 ${newDirection === 1 ? '顺时针 ↻' : '逆时针 ↺'}！`, 'indigo', 'reverse');
+        const newNextIdx = getNextTurn(playedBy, newDirection, totalPlayers, 1);
+        showActionAlert(`${actorName} 打出【反转卡】！出牌方向变为 ${newDirection === 1 ? '顺时针 ↻' : '逆时针 ↺'}！`, 'indigo', 'reverse');
         setCurrentTurnIdx(newNextIdx);
       }
     } else if (card.type === 'skip') {
-      showActionAlert(`<Ban size={12} className="inline mr-1" />${actorName} 打出【跳过卡】！${directNextName} 本轮被禁手跳过！`, 'rose', 'skip');
-      if (playedBy === 0) {
-        if (directNextIdx > 0) {
-          triggerCharacterBubble(companions[directNextIdx - 1].id, '居然跳过我！气煞我也！');
-        }
+      showActionAlert(`${actorName} 打出【跳过卡】！${directNextName} 本轮被禁手跳过！`, 'rose', 'skip');
+      if (playedBy === 0 && directNextIdx > 0) {
+        triggerCharacterBubble(companions[directNextIdx - 1].id, '居然跳过我！气煞我也！');
       }
-      const nextIdx = (playedBy + dir * 2 + totalPlayers * 2) % totalPlayers;
+      const nextIdx = getNextTurn(playedBy, dir, totalPlayers, 2);
       setCurrentTurnIdx(nextIdx);
     } else if (card.type === 'draw2') {
-      const drawnCards = drawCardsFromDeck(2);
+      const drawnCards = drawCards(2);
       if (directNextIdx === 0) {
         setUserHand(prev => [...prev, ...drawnCards]);
-        showActionAlert(`<Zap size={12} className="inline mr-1" />${actorName} 打出【+2 罚牌】！你被罚摸 2 张牌并跳过回合！`, 'amber', 'zap');
+        showActionAlert(`${actorName} 打出【+2 罚牌】！你被罚摸 2 张牌并跳过回合！`, 'amber', 'zap');
       } else {
         const victimComp = companions[directNextIdx - 1];
         setCompHands(prev => ({
           ...prev,
           [victimComp.id]: [...(prev[victimComp.id] || []), ...drawnCards]
         }));
-        showActionAlert(`<Zap size={12} className="inline mr-1" />${actorName} 打出【+2 罚牌】！${victimComp.name} 罚摸 2 张牌并跳过！`, 'amber', 'zap');
+        showActionAlert(`${actorName} 打出【+2 罚牌】！${victimComp.name} 罚摸 2 张牌并跳过！`, 'amber', 'zap');
         triggerCharacterBubble(victimComp.id, '啊！被加了2张牌！手牌越来越多了！');
       }
-      const nextIdx = (playedBy + dir * 2 + totalPlayers * 2) % totalPlayers;
+      const nextIdx = getNextTurn(playedBy, dir, totalPlayers, 2);
       setCurrentTurnIdx(nextIdx);
     } else if (card.type === 'wild4') {
-      const drawnCards = drawCardsFromDeck(4);
+      const drawnCards = drawCards(4);
       if (directNextIdx === 0) {
         setUserHand(prev => [...prev, ...drawnCards]);
-        showActionAlert(`<Zap size={14} className="inline mr-1" />${actorName} 打出【+4 王炸】并指定【${getColorName(chosenColor)}】！你被罚摸 4 张牌并跳过！`, 'rose', 'flame');
+        showActionAlert(`${actorName} 打出【WILD+4 万能牌】并指定【${COLOR_MAP[chosenColor]?.name || chosenColor}】！你被罚摸 4 张牌并跳过！`, 'rose', 'flame');
       } else {
         const victimComp = companions[directNextIdx - 1];
         setCompHands(prev => ({
           ...prev,
           [victimComp.id]: [...(prev[victimComp.id] || []), ...drawnCards]
         }));
-        showActionAlert(`<Zap size={14} className="inline mr-1" />${actorName} 打出【+4 王炸】并指定【${getColorName(chosenColor)}】！${victimComp.name} 罚摸 4 张牌并跳过！`, 'rose', 'flame');
+        showActionAlert(`${actorName} 打出【WILD+4 万能牌】并指定【${COLOR_MAP[chosenColor]?.name || chosenColor}】！${victimComp.name} 罚摸 4 张牌并跳过！`, 'rose', 'flame');
         triggerCharacterBubble(victimComp.id, '太狠了吧！+4暴击直接把我打懵了！');
       }
-      const nextIdx = (playedBy + dir * 2 + totalPlayers * 2) % totalPlayers;
+      const nextIdx = getNextTurn(playedBy, dir, totalPlayers, 2);
       setCurrentTurnIdx(nextIdx);
     } else if (card.type === 'wild') {
-      showActionAlert(`<Sparkles size={12} className="inline mr-1" />${actorName} 打出【万能变色牌】，将当前有效颜色变为【${getColorName(chosenColor)}】！`, 'emerald', 'sparkle');
-      const nextIdx = (playedBy + dir + totalPlayers * 2) % totalPlayers;
+      showActionAlert(`${actorName} 打出【WILD 万能变色牌】，将当前有效颜色变为【${COLOR_MAP[chosenColor]?.name || chosenColor}】！`, 'emerald', 'sparkle');
+      const nextIdx = getNextTurn(playedBy, dir, totalPlayers, 1);
       setCurrentTurnIdx(nextIdx);
     } else {
-      const nextIdx = (playedBy + dir + totalPlayers * 2) % totalPlayers;
+      const nextIdx = getNextTurn(playedBy, dir, totalPlayers, 1);
       setCurrentTurnIdx(nextIdx);
     }
   };
 
-  // User Executes Card Play
-  const executeUserCardPlay = (card: UNOCard, chosenColor: UNOColor) => {
-    const newHand = userHand.filter(c => c.id !== card.id);
-    setUserHand(newHand);
+  // 玩家真正执行出牌逻辑
+  const executeUserCardPlay = (card: UNOCard, chosenColor: UNOColor, isFromPending: boolean = false) => {
+    let newHand: UNOCard[];
+    if (isFromPending) {
+      newHand = [...userHand];
+      setDrawnCardPending(null);
+    } else {
+      newHand = userHand.filter(c => c.id !== card.id);
+    }
+
+    // 6. 弃牌堆留存
+    discardPileRef.current.push(discardTop);
     setDiscardTop(card);
     setActiveColor(chosenColor);
 
-    if (newHand.length === 1 && !unoShouted) {
-      setUnoShouted(true);
-      showActionAlert('<AlertTriangle size={12} className="inline mr-1" />我喊出了：“UNO！” 仅剩最后1张手牌！', 'amber', 'bell');
-      triggerCharacterBubble('user', 'UNO！');
+    // 7. UNO 声明判定
+    if (newHand.length === 1) {
+      if (userUnoDeclared) {
+        setUserUnoDeclared(false);
+        showActionAlert('我声明了：“UNO！” 仅剩最后 1 张手牌！', 'amber', 'bell');
+        triggerCharacterBubble('user', 'UNO！');
+      } else {
+        // 未声明 UNO，环境直接罚该玩家抽 2 张牌
+        const penalties = drawCards(2);
+        newHand = [...newHand, ...penalties];
+        showActionAlert('⚠️ 未在出牌时声明 UNO！被对手抓包罚摸 2 张牌！', 'rose', 'flame');
+        if (companions.length > 0) {
+          triggerCharacterBubble(companions[0].id, '抓到了！你没喊 UNO，罚抽2张！');
+        }
+      }
+    } else {
+      setUserUnoDeclared(false);
     }
 
+    setUserHand(newHand);
+
+    // 手牌为 0，游戏结束
     if (newHand.length === 0) {
       setWinnerName('我');
       setGameStage('gameover');
@@ -905,8 +1013,16 @@ function UnoGame({
     applyCardEffectsAndAdvance(0, card, chosenColor);
   };
 
+  // 玩家点击手牌尝试出牌
   const handleUserPlayCard = (card: UNOCard) => {
-    if (currentTurnIdx !== 0 || !isValidCard(card)) return;
+    if (currentTurnIdx !== 0 || drawnCardPending !== null) return;
+
+    // 4. 合法出牌校验（拦截非法 WILD+4 或不匹配牌）
+    const check = isCardPlayable(card, discardTop, activeColor, userHand);
+    if (!check.valid) {
+      showActionAlert(check.reason || '该牌不可出！请匹配颜色或符号', 'rose', 'ban');
+      return;
+    }
 
     if (card.type === 'wild' || card.type === 'wild4') {
       setPendingWildCard(card);
@@ -914,23 +1030,71 @@ function UnoGame({
       return;
     }
 
-    executeUserCardPlay(card, card.color);
+    executeUserCardPlay(card, card.color, false);
   };
 
+  // 3.4 玩家回合：抽牌
   const handleUserDrawCard = () => {
-    if (currentTurnIdx !== 0) return;
-    const drawn = drawCardsFromDeck(1);
-    const newHand = [...userHand, ...drawn];
-    setUserHand(newHand);
-    showActionAlert('<Layers size={12} className="inline mr-1" />你从牌堆摸了 1 张牌', 'slate', 'draw');
+    if (currentTurnIdx !== 0 || drawnCardPending !== null) return;
+    const drawn = drawCards(1);
+    if (drawn.length === 0) {
+      showActionAlert('牌堆与弃牌堆均已耗尽，跳过本次抽牌', 'slate', 'ban');
+      const totalPlayers = companions.length + 1;
+      const nextIdx = getNextTurn(currentTurnIdx, turnDirectionRef.current, totalPlayers, 1);
+      setCurrentTurnIdx(nextIdx);
+      return;
+    }
 
-    // Auto-advance turn
+    const drawnCard = drawn[0];
+    const check = isCardPlayable(drawnCard, discardTop, activeColor, [...userHand, drawnCard]);
+
+    if (check.valid) {
+      // 3.4: 若抽到的牌可以出，环境会再次询问该玩家是否立即出这张牌
+      setDrawnCardPending(drawnCard);
+      showActionAlert(`摸到了【${drawnCard.display}】（${COLOR_MAP[drawnCard.color]?.name || drawnCard.color}），可立即打出！`, 'indigo', 'sparkle');
+    } else {
+      // 3.4: 若抽到的牌不可出，回合自动结束
+      setUserHand(prev => [...prev, drawnCard]);
+      showActionAlert(`摸到了【${drawnCard.display}】（暂不可出），回合结束`, 'slate', 'draw');
+      const totalPlayers = companions.length + 1;
+      const nextIdx = getNextTurn(currentTurnIdx, turnDirectionRef.current, totalPlayers, 1);
+      setCurrentTurnIdx(nextIdx);
+    }
+  };
+
+  // 3.4 玩家选择 PASS 不出刚才抽到的牌
+  const handlePassDrawnCard = () => {
+    if (!drawnCardPending) return;
+    setUserHand(prev => [...prev, drawnCardPending]);
+    setDrawnCardPending(null);
+    showActionAlert('选择不出 (PASS)，保留手牌，回合结束', 'slate', 'pass');
     const totalPlayers = companions.length + 1;
-    const nextIdx = (currentTurnIdx + turnDirection + totalPlayers * 2) % totalPlayers;
+    const nextIdx = getNextTurn(0, turnDirectionRef.current, totalPlayers, 1);
     setCurrentTurnIdx(nextIdx);
   };
 
-  // AI Turn Handling with Real Hands & Action Strategy
+  // 3.4 玩家选择立即出刚才抽到的牌
+  const handlePlayDrawnCard = () => {
+    if (!drawnCardPending) return;
+    if (drawnCardPending.type === 'wild' || drawnCardPending.type === 'wild4') {
+      setPendingWildCard(drawnCardPending);
+      setShowColorPicker(true);
+      return;
+    }
+    executeUserCardPlay(drawnCardPending, drawnCardPending.color, true);
+  };
+
+  // 选择万能牌变色
+  const handleSelectColor = (chosenColor: UNOColor) => {
+    if (pendingWildCard) {
+      const isFromPending = drawnCardPending?.id === pendingWildCard.id;
+      executeUserCardPlay(pendingWildCard, chosenColor, isFromPending);
+      setPendingWildCard(null);
+    }
+    setShowColorPicker(false);
+  };
+
+  // AI 回合流转（只输出合法动作，严格遵守规范）
   useEffect(() => {
     if (gameStage !== 'playing' || currentTurnIdx === 0) return;
 
@@ -946,62 +1110,30 @@ function UnoGame({
       const currentHand = hands[comp.id] || [];
       const curActiveColor = activeColorRef.current;
       const curTop = discardTopRef.current;
+      const totalPlayers = comps.length + 1;
+      const nextPlayerIdx = getNextTurn(currentTurnIdx, turnDirectionRef.current, totalPlayers, 1);
+      const nextPlayerCount = nextPlayerIdx === 0
+        ? userHandRef.current.length
+        : (hands[comps[nextPlayerIdx - 1]?.id]?.length ?? 7);
 
-      // Filter valid playable cards
-      const validCards = currentHand.filter(card => {
-        if (card.color === 'wild' || card.type === 'wild' || card.type === 'wild4') return true;
-        if (card.color === curActiveColor) return true;
-        if (card.type === 'number' && curTop.type === 'number' && card.value === curTop.value) return true;
-        if (card.type !== 'number' && card.type === curTop.type) return true;
-        return false;
-      });
+      // AI 选牌策略（只输出合法动作）
+      const decision = aiSelectPlayableCard(currentHand, curTop, curActiveColor, nextPlayerCount);
 
-      if (validCards.length > 0) {
-        // AI Strategy:
-        // Priority 1: +4 or +2 or Skip if next player has few cards
-        // Priority 2: Same color action cards (Reverse, Skip, Draw2)
-        // Priority 3: Matching number/color
-        // Priority 4: Wild cards
-        validCards.sort((a, b) => {
-          const scoreMap: { [k: string]: number } = {
-            wild4: 5,
-            draw2: 4,
-            skip: 3,
-            reverse: 2,
-            number: 1,
-            wild: 0
-          };
-          return (scoreMap[b.type] || 0) - (scoreMap[a.type] || 0);
-        });
-
-        const chosenCard = validCards[0];
+      if (decision) {
+        const { card: chosenCard, chosenColor } = decision;
         const remainingHand = currentHand.filter(c => c.id !== chosenCard.id);
 
+        discardPileRef.current.push(curTop);
         setCompHands(prev => ({
           ...prev,
           [comp.id]: remainingHand
         }));
         setDiscardTop(chosenCard);
+        setActiveColor(chosenColor);
 
-        // Pick best color if Wild
-        let chosenColor: UNOColor = chosenCard.color;
-        if (chosenCard.color === 'wild' || chosenCard.type === 'wild' || chosenCard.type === 'wild4') {
-          const colorCounts: { [k: string]: number } = { red: 0, blue: 0, green: 0, yellow: 0 };
-          remainingHand.forEach(c => {
-            if (c.color !== 'wild') colorCounts[c.color] = (colorCounts[c.color] || 0) + 1;
-          });
-          const bestColor = (Object.keys(colorCounts) as ('red' | 'blue' | 'green' | 'yellow')[]).reduce((a, b) =>
-            colorCounts[a] >= colorCounts[b] ? a : b
-          );
-          chosenColor = bestColor;
-          setActiveColor(bestColor);
-        } else {
-          setActiveColor(chosenCard.color);
-        }
-
-        // Voice lines & Reaction
+        // 语音台词与气泡
         if (chosenCard.type === 'wild4') {
-          triggerCharacterBubble(comp.id, `吃我一记 +4 王炸！给我变【${getColorName(chosenColor)}】！`);
+          triggerCharacterBubble(comp.id, `吃我一记 +4 王炸！给我变【${COLOR_MAP[chosenColor].name}】！`);
         } else if (chosenCard.type === 'draw2') {
           triggerCharacterBubble(comp.id, `送你一张 +2 罚牌，多摸几张吧！`);
         } else if (chosenCard.type === 'skip') {
@@ -1009,14 +1141,15 @@ function UnoGame({
         } else if (chosenCard.type === 'reverse') {
           triggerCharacterBubble(comp.id, `反转！牌局方向逆转！`);
         } else if (chosenCard.type === 'wild') {
-          triggerCharacterBubble(comp.id, `万能变色！现在由我主导，变【${getColorName(chosenColor)}】！`);
+          triggerCharacterBubble(comp.id, `万能变色！现在由我主导，变【${COLOR_MAP[chosenColor].name}】！`);
         } else {
-          triggerCharacterBubble(comp.id, `出 ${getColorName(chosenCard.color)} 色【${chosenCard.display}】！`);
+          triggerCharacterBubble(comp.id, `出 ${COLOR_MAP[chosenCard.color].name} 色【${chosenCard.display}】！`);
         }
 
+        // 7. AI 出牌时若剩 1 张手牌，必须在同一动作中声明 UNO
         if (remainingHand.length === 1) {
           triggerCharacterBubble(comp.id, 'UNO！就剩最后一张牌了！');
-          showActionAlert(`<AlertTriangle size={12} className="inline mr-1" />${comp.name} 喊出了：“UNO！” 仅剩 1 张手牌！`, 'amber', 'bell');
+          showActionAlert(`${comp.name} 声明：“UNO！” 仅剩 1 张手牌！`, 'amber', 'bell');
         }
 
         if (remainingHand.length === 0) {
@@ -1028,17 +1161,48 @@ function UnoGame({
 
         applyCardEffectsAndAdvance(currentTurnIdx, chosenCard, chosenColor);
       } else {
-        // AI Draws 1 Card
-        const drawn = drawCardsFromDeck(1);
-        setCompHands(prev => ({
-          ...prev,
-          [comp.id]: [...(prev[comp.id] || []), ...drawn]
-        }));
-        triggerCharacterBubble(comp.id, '摸了一张牌，过~');
+        // 3.4 AI 抽牌
+        const drawn = drawCards(1);
+        if (drawn.length === 0) {
+          triggerCharacterBubble(comp.id, '牌堆已抽空，过~');
+          const nextIdx = getNextTurn(currentTurnIdx, turnDirectionRef.current, totalPlayers, 1);
+          setCurrentTurnIdx(nextIdx);
+          return;
+        }
 
-        const totalPlayers = companions.length + 1;
-        const nextIdx = (currentTurnIdx + turnDirectionRef.current + totalPlayers * 2) % totalPlayers;
-        setCurrentTurnIdx(nextIdx);
+        const drawnCard = drawn[0];
+        const canPlayDrawn = isCardPlayable(drawnCard, curTop, curActiveColor, [...currentHand, drawnCard]).valid;
+
+        if (canPlayDrawn) {
+          // AI 立即出牌并结算
+          let chosenColor: UNOColor = drawnCard.color;
+          if (drawnCard.type === 'wild' || drawnCard.type === 'wild4') {
+            chosenColor = aiChooseBestColor(currentHand);
+          }
+
+          discardPileRef.current.push(curTop);
+          setDiscardTop(drawnCard);
+          setActiveColor(chosenColor);
+
+          triggerCharacterBubble(comp.id, `摸到【${drawnCard.display}】并立即打出！`);
+          showActionAlert(`${comp.name} 摸到了【${drawnCard.display}】并立即打出！`, 'indigo', 'sparkle');
+
+          if (currentHand.length === 1) {
+            triggerCharacterBubble(comp.id, 'UNO！就剩最后一张牌了！');
+            showActionAlert(`${comp.name} 声明：“UNO！” 仅剩 1 张手牌！`, 'amber', 'bell');
+          }
+
+          applyCardEffectsAndAdvance(currentTurnIdx, drawnCard, chosenColor);
+        } else {
+          // AI 保留手牌，回合自动结束
+          setCompHands(prev => ({
+            ...prev,
+            [comp.id]: [...(prev[comp.id] || []), drawnCard]
+          }));
+          triggerCharacterBubble(comp.id, '摸了一张牌，不可出，过~');
+          const nextIdx = getNextTurn(currentTurnIdx, turnDirectionRef.current, totalPlayers, 1);
+          setCurrentTurnIdx(nextIdx);
+        }
       }
     }, 1100);
 
@@ -1094,6 +1258,29 @@ function UnoGame({
     );
   };
 
+  if (companions.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 p-6 text-center space-y-4">
+        <div className="w-16 h-16 rounded-3xl bg-sky-50 border border-sky-200 flex items-center justify-center text-sky-500 shadow-sm">
+          <Users size={32} />
+        </div>
+        <div className="space-y-1.5 max-w-xs">
+          <h3 className="text-sm font-black text-slate-800">联系人列表未添加人设</h3>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            UNO对决不设预设陪玩NPC，需在手机通讯录中至少添加 1 位角色人设后方可开启该功能。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onBackToLobby}
+          className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+        >
+          返回游戏大厅
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col justify-between bg-gradient-to-b from-slate-900 via-indigo-950 to-slate-900 p-3 select-none relative overflow-hidden">
       {/* Top Action Notification Banner */}
@@ -1139,7 +1326,7 @@ function UnoGame({
                   : 'bg-amber-400'
               }`}
             />
-            <span className="font-black text-xs text-white">{getColorName(activeColor)}</span>
+            <span className="font-black text-xs text-white">{COLOR_MAP[activeColor]?.name || activeColor}</span>
           </div>
         </div>
         <div className="flex items-center space-x-1.5">
@@ -1233,11 +1420,33 @@ function UnoGame({
 
       {/* User Hand & Interactive Action Controls */}
       <div className="flex flex-col space-y-2 z-10 pt-1">
-        <div className="flex justify-center items-center space-x-3 h-8">
+        <div className="flex justify-center items-center space-x-2.5 h-8">
           {currentTurnIdx === 0 ? (
-            <span className="text-xs text-amber-300 font-bold bg-black/50 px-3.5 py-1 rounded-full border border-indigo-500/30 animate-bounce">
-              <Sparkles size={12} className="inline mr-1" />轮到你出牌，点击匹配颜色、点数或打出功能牌
-            </span>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs text-amber-300 font-bold bg-black/50 px-3.5 py-1 rounded-full border border-indigo-500/30">
+                <Sparkles size={12} className="inline mr-1" />轮到你出牌
+              </span>
+              {userHand.length <= 2 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserUnoDeclared(prev => !prev);
+                    if (!userUnoDeclared) {
+                      showActionAlert('已声明 UNO！出牌后手牌剩 1 张时不会被罚牌！', 'amber', 'bell');
+                    }
+                  }}
+                  className={`px-3 py-1 rounded-full text-xs font-black transition-all flex items-center space-x-1 active:scale-95 cursor-pointer ${
+                    userUnoDeclared
+                      ? 'bg-amber-400 text-slate-950 shadow-lg shadow-amber-400/50 ring-2 ring-white animate-pulse'
+                      : 'bg-rose-600 hover:bg-rose-500 text-white shadow-md animate-bounce'
+                  }`}
+                  title="手牌剩2张出牌前请务必声明 UNO，否则出完剩1张时会被抓包罚抽2张！"
+                >
+                  <Bell size={12} />
+                  <span>{userUnoDeclared ? '✓ 已声明 UNO' : '📢 喊 UNO!'}</span>
+                </button>
+              )}
+            </div>
           ) : (
             <span className="text-xs text-gray-400 flex items-center space-x-1 bg-black/40 px-3 py-1 rounded-full border border-slate-700">
               <RotateCcw size={12} className="animate-spin" />
@@ -1298,8 +1507,18 @@ function UnoGame({
           >
             <div className="bg-slate-900 border border-indigo-500/50 rounded-3xl p-5 text-center max-w-xs w-full shadow-2xl space-y-4">
               <div>
-                <h3 className="text-sm font-black text-white">
-                  {pendingWildCard?.type === 'wild4' ? '<Zap size={14} className="inline mr-1" />打出 +4 王炸！请指定变色' : '<Sparkles size={12} className="inline mr-1" />打出万能牌！请指定变色'}
+                <h3 className="text-sm font-black text-white flex items-center justify-center space-x-1.5">
+                  {pendingWildCard?.type === 'wild4' ? (
+                    <>
+                      <Zap size={14} className="text-amber-400 inline mr-1" />
+                      <span>打出 +4 王炸！请指定变色</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={14} className="text-emerald-400 inline mr-1" />
+                      <span>打出万能牌！请指定变色</span>
+                    </>
+                  )}
                 </h3>
                 <p className="text-[11px] text-gray-400 mt-1">选择接下来牌桌的有效出牌颜色</p>
               </div>
@@ -1355,6 +1574,69 @@ function UnoGame({
         )}
       </AnimatePresence>
 
+      {/* 3.4 抽牌后可立即出牌的询问弹窗 */}
+      <AnimatePresence>
+        {drawnCardPending && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4"
+          >
+            <div className="bg-slate-900 border border-indigo-500/50 rounded-3xl p-5 text-center max-w-xs w-full shadow-2xl space-y-4">
+              <div>
+                <h3 className="text-sm font-black text-white flex items-center justify-center space-x-1.5">
+                  <Sparkles size={16} className="text-amber-400 inline mr-1" />
+                  <span>抽到可出牌！是否立即打出？</span>
+                </h3>
+                <p className="text-[11px] text-gray-400 mt-1">按经典规则可选择立即打出该牌，或不出 (PASS) 保留在手牌中</p>
+              </div>
+
+              {/* Card preview */}
+              <div className="flex justify-center py-2">
+                <div
+                  className={`w-14 h-22 rounded-xl shadow-xl border-2 flex flex-col justify-between p-1.5 font-black ${
+                    drawnCardPending.color === 'red'
+                      ? 'bg-gradient-to-br from-rose-500 to-red-600 text-white border-white'
+                      : drawnCardPending.color === 'blue'
+                      ? 'bg-gradient-to-br from-sky-500 to-blue-600 text-white border-white'
+                      : drawnCardPending.color === 'green'
+                      ? 'bg-gradient-to-br from-emerald-500 to-green-600 text-white border-white'
+                      : drawnCardPending.color === 'yellow'
+                      ? 'bg-gradient-to-br from-amber-400 to-yellow-500 text-slate-950 border-white'
+                      : 'bg-gradient-to-br from-purple-700 via-rose-600 to-amber-500 text-white border-amber-300'
+                  }`}
+                >
+                  <span className="text-xs self-start leading-none">{drawnCardPending.display}</span>
+                  <div className="self-center">
+                    {renderCardFace(drawnCardPending, false)}
+                  </div>
+                  <span className="text-xs self-end leading-none transform rotate-180">{drawnCardPending.display}</span>
+                </div>
+              </div>
+
+              <div className="flex space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handlePassDrawnCard}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs shadow-md active:scale-95 cursor-pointer"
+                >
+                  不出 (PASS)
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePlayDrawnCard}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 font-black text-xs shadow-lg active:scale-95 cursor-pointer flex items-center justify-center space-x-1"
+                >
+                  <Play size={14} className="fill-slate-950" />
+                  <span>立即打出</span>
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Game Over Modal */}
       <AnimatePresence>
         {gameStage === 'gameover' && (
@@ -1368,8 +1650,15 @@ function UnoGame({
               <div className="w-16 h-16 rounded-full bg-indigo-500/20 border-2 border-indigo-400 mx-auto flex items-center justify-center text-indigo-400">
                 <Trophy size={32} />
               </div>
-              <h3 className="text-xl font-black text-indigo-300">
-                {winnerName === '我' ? '<Sparkles size={16} className="inline mr-1" />UNO 最终决胜！' : `👑 ${winnerName} 获得胜利！`}
+              <h3 className="text-xl font-black text-indigo-300 flex items-center justify-center space-x-1.5">
+                {winnerName === '我' ? (
+                  <>
+                    <Sparkles size={18} className="inline mr-1 text-amber-300 animate-pulse" />
+                    <span>UNO 最终决胜！</span>
+                  </>
+                ) : (
+                  <span>👑 {winnerName} 获得胜利！</span>
+                )}
               </h3>
               <p className="text-xs text-gray-300">
                 {winnerName === '我' ? '恭喜你在角色对决中率先打光所有手牌！' : '很遗憾，被对手先一步出完了手牌~'}
@@ -1439,17 +1728,25 @@ export default function GameCenterView({ onHome }: { onHome: () => void }) {
             quote: '随时奉陪！'
           }));
           setAllContacts(mapped);
-          setSelectedCompanions(mapped.slice(0, 3));
+          setSelectedCompanions(mapped.slice(0, 2));
         } else {
-          setAllContacts(DEFAULT_COMPANIONS);
-          setSelectedCompanions(DEFAULT_COMPANIONS);
+          setAllContacts([]);
+          setSelectedCompanions([]);
         }
       } catch (e) {
-        setAllContacts(DEFAULT_COMPANIONS);
-        setSelectedCompanions(DEFAULT_COMPANIONS);
+        setAllContacts([]);
+        setSelectedCompanions([]);
       }
     };
     fetchContacts();
+  }, []);
+
+  const [lobbyAlert, setLobbyAlert] = useState<string | null>(null);
+  const showLobbyAlert = useCallback((msg: string) => {
+    setLobbyAlert(msg);
+    setTimeout(() => {
+      setLobbyAlert(prev => (prev === msg ? null : prev));
+    }, 2800);
   }, []);
 
   const addCoins = useCallback((amount: number) => {
@@ -1537,12 +1834,37 @@ export default function GameCenterView({ onHome }: { onHome: () => void }) {
   };
 
   const handleStartGameWithCompanions = (game: ActiveGameType) => {
+    if (game === 'doudizhu' && allContacts.length < 2) {
+      showLobbyAlert('联系人列表未添加人设（斗地主需至少2位联系人人设陪玩），请先在通讯录添加人设角色！');
+      return;
+    }
+    if (game === 'uno' && allContacts.length === 0) {
+      showLobbyAlert('联系人列表未添加人设（UNO需至少1位联系人人设陪玩），请先在通讯录添加人设角色！');
+      return;
+    }
     setPendingGameToStart(game);
+    if (game === 'doudizhu') {
+      if (selectedCompanions.length !== 2 && allContacts.length >= 2) {
+        setSelectedCompanions(allContacts.slice(0, 2));
+      }
+    } else if (game === 'uno') {
+      if (selectedCompanions.length === 0 && allContacts.length > 0) {
+        setSelectedCompanions(allContacts.slice(0, Math.min(allContacts.length, 3)));
+      }
+    }
     setShowCompanionPicker(true);
   };
 
   const confirmCompanionsAndLaunch = () => {
     if (!pendingGameToStart) return;
+    if (pendingGameToStart === 'doudizhu' && selectedCompanions.length !== 2) {
+      showLobbyAlert('斗地主需要选择 2 位联系人角色陪玩！');
+      return;
+    }
+    if (pendingGameToStart === 'uno' && selectedCompanions.length === 0) {
+      showLobbyAlert('UNO需要选择至少 1 位联系人角色陪玩！');
+      return;
+    }
     setShowCompanionPicker(false);
     setActiveGame(pendingGameToStart);
     setChatMessages([]);
@@ -1636,59 +1958,137 @@ export default function GameCenterView({ onHome }: { onHome: () => void }) {
                   <span className="text-[10px] text-amber-400 font-bold">即开即玩 · 流畅对局</span>
                 </div>
 
-                <div
-                  onClick={() => handleStartGameWithCompanions('doudizhu')}
-                  className="bg-white border border-gray-200 hover:border-amber-400 rounded-3xl p-4 transition-all shadow-sm hover:shadow-md hover:shadow-amber-500/10 cursor-pointer active:scale-[0.99] flex items-center justify-between group"
-                >
-                  <div className="flex items-center space-x-3.5">
-                    <div className="w-13 h-13 shrink-0 rounded-2xl flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs" style={{ backgroundColor: '#ffc242' }}>
-                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-                        {/* 倾斜底牌 */}
-                        <rect x="2.5" y="5.5" width="11" height="15" rx="1.8" fill="#ffc242" stroke="#ce992d" strokeWidth="1.8" transform="rotate(-14 8 13)" />
-                        {/* 正向顶牌 */}
-                        <rect x="9.5" y="3.5" width="11" height="15" rx="1.8" fill="#ffc242" stroke="#ce992d" strokeWidth="1.8" />
-                        {/* 牌面 A 与 菱形花色 */}
-                        <text x="11.2" y="9.2" fontSize="5.5" fontWeight="900" fill="#ce992d" fontFamily="system-ui, sans-serif">A</text>
-                        <path d="M15 11.2 L16.8 13.8 L15 16.4 L13.2 13.8 Z" fill="#ce992d" />
-                      </svg>
-                    </div>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <h3 className="text-sm font-black text-slate-800">经典斗地主</h3>
-                        <span className="text-[9px] px-2 py-0.5 rounded-full font-bold border" style={{ backgroundColor: '#fff8e7', color: '#ce992d', borderColor: '#fce3a6' }}>
-                          3人对战
-                        </span>
+                {/* 经典斗地主 Card */}
+                {(() => {
+                  const isDdzAvailable = allContacts.length >= 2;
+                  return (
+                    <div
+                      onClick={() => {
+                        if (!isDdzAvailable) {
+                          showLobbyAlert('联系人列表未添加人设（斗地主需至少2位联系人人设陪玩），请先在通讯录添加人设角色！');
+                          return;
+                        }
+                        handleStartGameWithCompanions('doudizhu');
+                      }}
+                      className={`border rounded-3xl p-4 transition-all flex items-center justify-between group ${
+                        isDdzAvailable
+                          ? 'bg-white border-gray-200 hover:border-amber-400 shadow-sm hover:shadow-md hover:shadow-amber-500/10 cursor-pointer active:scale-[0.99]'
+                          : 'bg-gray-50/80 border-gray-200/70 opacity-60 cursor-not-allowed'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3.5">
+                        <div
+                          className={`w-13 h-13 shrink-0 rounded-2xl flex items-center justify-center transition-transform shadow-xs ${
+                            isDdzAvailable ? 'group-hover:scale-105' : 'grayscale-[40%]'
+                          }`}
+                          style={{ backgroundColor: '#ffc242' }}
+                        >
+                          <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                            {/* 倾斜底牌 */}
+                            <rect x="2.5" y="5.5" width="11" height="15" rx="1.8" fill="#ffc242" stroke="#ce992d" strokeWidth="1.8" transform="rotate(-14 8 13)" />
+                            {/* 正向顶牌 */}
+                            <rect x="9.5" y="3.5" width="11" height="15" rx="1.8" fill="#ffc242" stroke="#ce992d" strokeWidth="1.8" />
+                            {/* 牌面 A 与 菱形花色 */}
+                            <text x="11.2" y="9.2" fontSize="5.5" fontWeight="900" fill="#ce992d" fontFamily="system-ui, sans-serif">A</text>
+                            <path d="M15 11.2 L16.8 13.8 L15 16.4 L13.2 13.8 Z" fill="#ce992d" />
+                          </svg>
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <h3 className="text-sm font-black text-slate-800">经典斗地主</h3>
+                            <span
+                              className="text-[9px] px-2 py-0.5 rounded-full font-bold border"
+                              style={
+                                isDdzAvailable
+                                  ? { backgroundColor: '#fff8e7', color: '#ce992d', borderColor: '#fce3a6' }
+                                  : { backgroundColor: '#f1f5f9', color: '#94a3b8', borderColor: '#e2e8f0' }
+                              }
+                            >
+                              {isDdzAvailable ? '3人对战' : '暂不可用 · 缺人设'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {isDdzAvailable
+                              ? '叫抢地主、王炸连对、经典农民与地主博弈'
+                              : '联系人列表未添加人设，暂无陪玩NPC'}
+                          </p>
+                        </div>
                       </div>
-                      <p className="text-xs text-gray-500 mt-0.5">叫抢地主、王炸连对、经典农民与地主博弈</p>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                        isDdzAvailable
+                          ? 'bg-gray-100 text-gray-500 group-hover:text-amber-500 group-hover:bg-gray-200 transition-colors'
+                          : 'bg-gray-100 text-gray-400'
+                      }`}>
+                        {isDdzAvailable ? <ChevronRight size={18} /> : <Lock size={15} />}
+                      </div>
                     </div>
-                  </div>
-                  <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 group-hover:text-amber-500 group-hover:bg-gray-200 transition-colors shrink-0">
-                    <ChevronRight size={18} />
-                  </div>
-                </div>
+                  );
+                })()}
 
-                <div
-                  onClick={() => handleStartGameWithCompanions('uno')}
-                  className="bg-white border border-gray-200 hover:border-sky-400 rounded-3xl p-4 transition-all shadow-sm hover:shadow-md hover:shadow-sky-500/10 cursor-pointer active:scale-[0.99] flex items-center justify-between group"
-                >
-                  <div className="flex items-center space-x-3.5">
-                    <div className="w-13 h-13 shrink-0 rounded-2xl border border-sky-300/40 flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs" style={{ backgroundColor: '#98cffb' }}>
-                      <Layers size={26} className="stroke-[2.2]" style={{ color: '#449be3' }} />
-                    </div>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <h3 className="text-sm font-black text-slate-800">UNO 优诺</h3>
-                        <span className="text-[9px] px-2 py-0.5 rounded-full font-bold border" style={{ backgroundColor: '#f0f8ff', color: '#449be3', borderColor: '#c1e2fd' }}>
-                          2~4人狂欢
-                        </span>
+                {/* UNO 优诺 Card */}
+                {(() => {
+                  const isUnoAvailable = allContacts.length > 0;
+                  return (
+                    <div
+                      onClick={() => {
+                        if (!isUnoAvailable) {
+                          showLobbyAlert('联系人列表未添加人设（UNO需至少1位联系人人设陪玩），请先在通讯录添加人设角色！');
+                          return;
+                        }
+                        handleStartGameWithCompanions('uno');
+                      }}
+                      className={`border rounded-3xl p-4 transition-all flex items-center justify-between group ${
+                        isUnoAvailable
+                          ? 'bg-white border-gray-200 hover:border-sky-400 shadow-sm hover:shadow-md hover:shadow-sky-500/10 cursor-pointer active:scale-[0.99]'
+                          : 'bg-gray-50/80 border-gray-200/70 opacity-60 cursor-not-allowed'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3.5">
+                        <div
+                          className={`w-13 h-13 shrink-0 rounded-2xl border flex items-center justify-center transition-transform shadow-xs ${
+                            isUnoAvailable
+                              ? 'border-sky-300/40 group-hover:scale-105'
+                              : 'border-gray-200 grayscale-[40%]'
+                          }`}
+                          style={{ backgroundColor: isUnoAvailable ? '#98cffb' : '#e2e8f0' }}
+                        >
+                          <Layers
+                            size={26}
+                            className="stroke-[2.2]"
+                            style={{ color: isUnoAvailable ? '#449be3' : '#94a3b8' }}
+                          />
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <h3 className="text-sm font-black text-slate-800">UNO 优诺</h3>
+                            <span
+                              className="text-[9px] px-2 py-0.5 rounded-full font-bold border"
+                              style={
+                                isUnoAvailable
+                                  ? { backgroundColor: '#f0f8ff', color: '#449be3', borderColor: '#c1e2fd' }
+                                  : { backgroundColor: '#f1f5f9', color: '#94a3b8', borderColor: '#e2e8f0' }
+                              }
+                            >
+                              {isUnoAvailable ? '2~4人狂欢' : '暂不可用 · 缺人设'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {isUnoAvailable
+                              ? '转盘变色、+4惩罚、反转跳过与高燃喊UNO'
+                              : '联系人列表未添加人设，暂无陪玩NPC'}
+                          </p>
+                        </div>
                       </div>
-                      <p className="text-xs text-gray-500 mt-0.5">转盘变色、+4惩罚、反转跳过与高燃喊UNO</p>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                        isUnoAvailable
+                          ? 'bg-gray-100 text-gray-500 group-hover:text-sky-500 group-hover:bg-gray-200 transition-colors'
+                          : 'bg-gray-100 text-gray-400'
+                      }`}>
+                        {isUnoAvailable ? <ChevronRight size={18} /> : <Lock size={15} />}
+                      </div>
                     </div>
-                  </div>
-                  <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 group-hover:text-sky-500 group-hover:bg-gray-200 transition-colors shrink-0">
-                    <ChevronRight size={18} />
-                  </div>
-                </div>
+                  );
+                })()}
 
                 <div
                   onClick={() => setActiveGame('aiAdventure')}
@@ -1749,25 +2149,67 @@ export default function GameCenterView({ onHome }: { onHome: () => void }) {
 
       {/* Sub-game views with stable top-level components */}
       {activeGame === 'doudizhu' && (
-        <DoudizhuGame
-          selectedCompanions={selectedCompanions}
-          onBackToLobby={() => setActiveGame('lobby')}
-          addCoins={addCoins}
-          onWin={handleGameWin}
-          triggerCharacterBubble={triggerCharacterBubble}
-          floatingBubbles={floatingBubbles}
-        />
+        selectedCompanions.length >= 2 ? (
+          <DoudizhuGame
+            selectedCompanions={selectedCompanions}
+            onBackToLobby={() => setActiveGame('lobby')}
+            addCoins={addCoins}
+            onWin={handleGameWin}
+            triggerCharacterBubble={triggerCharacterBubble}
+            floatingBubbles={floatingBubbles}
+          />
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 p-6 text-center space-y-4">
+            <div className="w-16 h-16 rounded-3xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-500 shadow-sm">
+              <Users size={32} />
+            </div>
+            <div className="space-y-1.5 max-w-xs">
+              <h3 className="text-sm font-black text-slate-800">联系人列表未添加人设</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                斗地主不设预设陪玩NPC，需在手机通讯录中至少添加 2 位角色人设后方可开启该功能。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveGame('lobby')}
+              className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+            >
+              返回游戏大厅
+            </button>
+          </div>
+        )
       )}
 
       {activeGame === 'uno' && (
-        <UnoGame
-          selectedCompanions={selectedCompanions}
-          onBackToLobby={() => setActiveGame('lobby')}
-          addCoins={addCoins}
-          onWin={handleGameWin}
-          triggerCharacterBubble={triggerCharacterBubble}
-          floatingBubbles={floatingBubbles}
-        />
+        selectedCompanions.length > 0 ? (
+          <UnoGame
+            selectedCompanions={selectedCompanions}
+            onBackToLobby={() => setActiveGame('lobby')}
+            addCoins={addCoins}
+            onWin={handleGameWin}
+            triggerCharacterBubble={triggerCharacterBubble}
+            floatingBubbles={floatingBubbles}
+          />
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 p-6 text-center space-y-4">
+            <div className="w-16 h-16 rounded-3xl bg-sky-50 border border-sky-200 flex items-center justify-center text-sky-500 shadow-sm">
+              <Users size={32} />
+            </div>
+            <div className="space-y-1.5 max-w-xs">
+              <h3 className="text-sm font-black text-slate-800">联系人列表未添加人设</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                UNO对决不设预设陪玩NPC，需在手机通讯录中至少添加 1 位角色人设后方可开启该功能。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveGame('lobby')}
+              className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+            >
+              返回游戏大厅
+            </button>
+          </div>
+        )
       )}
 
       {activeGame === 'aiAdventure' && (
@@ -1789,7 +2231,9 @@ export default function GameCenterView({ onHome }: { onHome: () => void }) {
               <div className="flex justify-between items-center pb-1 border-b border-gray-200">
                 <div className="flex items-center space-x-2">
                   <Users size={18} className="text-amber-400" />
-                  <h3 className="text-sm font-black text-slate-800">选择陪玩好友 (1~3人)</h3>
+                  <h3 className="text-sm font-black text-slate-800">
+                    {pendingGameToStart === 'doudizhu' ? '选择斗地主陪玩角色 (需2人)' : '选择UNO陪玩角色 (需1~3人)'}
+                  </h3>
                 </div>
                 <button
                   type="button"
@@ -1801,44 +2245,65 @@ export default function GameCenterView({ onHome }: { onHome: () => void }) {
               </div>
 
               <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {allContacts.map((c) => {
-                  const isSelected = selectedCompanions.some(item => item.id === c.id);
-                  return (
-                    <div
-                      key={c.id}
-                      onClick={() => {
-                        if (isSelected) {
-                          if (selectedCompanions.length > 1) {
+                {allContacts.length === 0 ? (
+                  <div className="py-10 px-4 text-center space-y-2.5 border border-dashed border-gray-200 rounded-2xl bg-gray-50/70">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mx-auto">
+                      <Users size={22} />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-black text-slate-700">联系人列表暂无人设</h4>
+                      <p className="text-[10px] text-slate-400 max-w-[210px] mx-auto leading-relaxed">
+                        当前未添加任何联系人人设角色，无法开启陪玩对局。请先在手机通讯录中添加角色人设！
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  allContacts.map((c) => {
+                    const isSelected = selectedCompanions.some(item => item.id === c.id);
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => {
+                          if (isSelected) {
                             setSelectedCompanions(prev => prev.filter(item => item.id !== c.id));
+                          } else {
+                            const maxLimit = pendingGameToStart === 'doudizhu' ? 2 : 3;
+                            if (selectedCompanions.length < maxLimit) {
+                              setSelectedCompanions(prev => [...prev, c]);
+                            } else if (pendingGameToStart === 'doudizhu') {
+                              setSelectedCompanions(prev => [prev[1] || prev[0], c]);
+                            }
                           }
-                        } else {
-                          if (selectedCompanions.length < 3) {
-                            setSelectedCompanions(prev => [...prev, c]);
-                          }
-                        }
-                      }}
-                      className={`flex items-center justify-between p-2.5 rounded-2xl border transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-amber-500/15 border-amber-400 text-slate-800'
-                          : 'bg-gray-50/60 border-gray-200/60 text-gray-500 hover:bg-gray-100'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-3 min-w-0">
-                        <img src={c.avatar} alt={c.name} className="w-10 h-10 rounded-full object-cover border border-gray-300 shrink-0" />
-                        <div className="min-w-0">
-                          <h4 className="text-xs font-bold text-slate-800 truncate">{c.name}</h4>
-                          <p className="text-[10px] text-gray-500 truncate">{c.persona || c.quote}</p>
+                        }}
+                        className={`flex items-center justify-between p-2.5 rounded-2xl border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-amber-500/15 border-amber-400 text-slate-800'
+                            : 'bg-gray-50/60 border-gray-200/60 text-gray-500 hover:bg-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-3 min-w-0">
+                          <img src={c.avatar} alt={c.name} className="w-10 h-10 rounded-full object-cover border border-gray-300 shrink-0" />
+                          <div className="min-w-0">
+                            <h4 className="text-xs font-bold text-slate-800 truncate">{c.name}</h4>
+                            <p className="text-[10px] text-gray-500 truncate">{c.persona || c.quote}</p>
+                          </div>
+                        </div>
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center border shrink-0 ${
+                          isSelected ? 'bg-amber-400 border-amber-400 text-slate-950' : 'border-gray-300'
+                        }`}>
+                          {isSelected && <Check size={12} className="stroke-[3]" />}
                         </div>
                       </div>
-                      <div className={`w-5 h-5 rounded-full flex items-center justify-center border shrink-0 ${
-                        isSelected ? 'bg-amber-400 border-amber-400 text-slate-950' : 'border-gray-300'
-                      }`}>
-                        {isSelected && <Check size={12} className="stroke-[3]" />}
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
+
+              {pendingGameToStart === 'doudizhu' && allContacts.length > 0 && allContacts.length < 2 && (
+                <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-center font-medium">
+                  斗地主需要 2 位联系人陪玩，当前可用人设仅 {allContacts.length} 位，数量不足。
+                </div>
+              )}
 
               <div className="flex space-x-2 pt-2">
                 <button
@@ -1850,10 +2315,29 @@ export default function GameCenterView({ onHome }: { onHome: () => void }) {
                 </button>
                 <button
                   type="button"
+                  disabled={
+                    allContacts.length === 0 ||
+                    (pendingGameToStart === 'doudizhu' && selectedCompanions.length !== 2) ||
+                    (pendingGameToStart === 'uno' && selectedCompanions.length === 0)
+                  }
                   onClick={confirmCompanionsAndLaunch}
-                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 font-black text-xs shadow-lg cursor-pointer"
+                  className={`flex-1 py-2.5 rounded-xl font-black text-xs shadow-lg transition-all ${
+                    allContacts.length === 0 ||
+                    (pendingGameToStart === 'doudizhu' && selectedCompanions.length !== 2) ||
+                    (pendingGameToStart === 'uno' && selectedCompanions.length === 0)
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
+                      : 'bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 cursor-pointer active:scale-95'
+                  }`}
                 >
-                  开始对局 ({selectedCompanions.length}人)
+                  {allContacts.length === 0
+                    ? '暂不可用 (未添加人设)'
+                    : pendingGameToStart === 'doudizhu'
+                    ? selectedCompanions.length === 2
+                      ? '开始对局 (2位好友陪玩)'
+                      : `请选择 2 位好友 (${selectedCompanions.length}/2)`
+                    : selectedCompanions.length > 0
+                    ? `开始对局 (${selectedCompanions.length + 1}人狂欢)`
+                    : '请选择至少1位好友'}
                 </button>
               </div>
             </div>
@@ -1892,7 +2376,7 @@ export default function GameCenterView({ onHome }: { onHome: () => void }) {
                   '手下留情啊各位大佬！',
                   '我感觉有人在吹牛诈唬！',
                   '看我这把绝地翻盘！',
-                  '给大佬端茶倒水<Coins size={12} className="inline" />'
+                  '给大佬端茶倒水 🍵'
                 ].map((phrase, idx) => (
                   <button
                     key={idx}
@@ -1948,6 +2432,21 @@ export default function GameCenterView({ onHome }: { onHome: () => void }) {
                 <Send size={15} />
               </button>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Lobby Alert Toast */}
+      <AnimatePresence>
+        {lobbyAlert && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl shadow-xl text-xs font-bold flex items-center space-x-2 text-slate-800 bg-white border border-amber-300 shadow-amber-500/10 pointer-events-none max-w-[85vw] text-center"
+          >
+            <AlertTriangle size={15} className="text-amber-500 shrink-0" />
+            <span>{lobbyAlert}</span>
           </motion.div>
         )}
       </AnimatePresence>

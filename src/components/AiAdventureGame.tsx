@@ -536,9 +536,11 @@ export default function AiAdventureGame({
         }
       });
 
-      const fullStoryText = lines.join('\n');
-      // Add UTF-8 BOM (\uFEFF) to prevent garbled text/mojibake when opened in Windows Notepad or other text editors
-      const blob = new Blob(['\uFEFF' + fullStoryText], { type: 'text/plain;charset=utf-8' });
+      const fullStoryText = lines.join('\r\n');
+      // Standard UTF-8 BOM bytes via TextEncoder for 100% binary safety on mobile phones (Android/iOS) and PC
+      const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+      const contentBytes = new TextEncoder().encode(fullStoryText);
+      const blob = new Blob([bom, contentBytes], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const safeTitle = session.title.replace(/[/\\?%*:|"<>]/g, '_') || '文游故事';
@@ -771,7 +773,8 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
 6. 当收到玩家的行动时，根据其大纲设定合理推导其后果。
 7. 【角色信息差约束（严禁NPC开天眼）】：NPC角色间必须存在真实的信息差。若某角色不在现场且玩家未主动告知，该角色绝不知晓玩家的单独行动与隐秘举动。
 8. 【严禁NPC直白背诵法则】：角色不可直白地以系统化/说明书式的口吻背诵或提及世界法则与铁律。
-9. 【严禁直白提及数值】：严禁输出具体数值（如生命值、好感度、伤害点数等），必须全部转化为神态、伤情、语气等细腻沉浸的文学描写。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
+9. 【严禁直白提及数值】：严禁输出具体数值（如生命值、好感度、伤害点数等），必须全部转化为神态、伤情、语气等细腻沉浸的文学描写。
+10. 【减少破折号的使用】：严格克制并极力减少破折号（“——”或“—”）的使用，严禁滥用破折号制造刻意的文学停顿、心理拉扯感或故弄玄虚；叙事与对话多采用逗号、句号等规范标点或干净利落的短句，非绝对必要的戏剧性突转绝不使用破折号。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
 
     const userPrompt = `我已经准备好了。请充当GM阅读我的游戏大纲和设定，开始我的冒险！请先向我生动细致地介绍游戏的开局背景和初始场景，并引导我进行第一个行动或选择。`;
 
@@ -877,7 +880,8 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
 5. 【禁止擅自代位描写】：绝对禁止提前预设并擅自描写玩家未做出的动作、未作出的决定以及玩家的主观心理活动！你只能控制世界与NPC，玩家的行为必须由玩家亲自输入。
 6. 【角色信息差约束（严禁NPC开天眼）】：NPC角色间必须存在真实的信息差。若某角色不在现场且玩家未主动告知，该角色绝不知晓玩家的单独行动与隐秘举动。
 7. 【严禁NPC直白背诵法则】：角色不可直白地以系统化/说明书式的口吻背诵或提及世界法则与铁律。
-8. 【严禁直白提及数值】：严禁输出具体数值（如生命值、好感度、伤害点数等），必须全部转化为神态、伤情、语气等细腻沉浸的文学描写。\n9. 【字数限制】：你的单次回复字数上限最多为 500 字左右。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
+8. 【严禁直白提及数值】：严禁输出具体数值（如生命值、好感度、伤害点数等），必须全部转化为神态、伤情、语气等细腻沉浸的文学描写。
+9. 【减少破折号的使用】：严格克制并极力减少破折号（“——”或“—”）的使用，严禁滥用破折号制造刻意的文学停顿、心理拉扯感或故弄玄虚；叙事与对话多采用逗号、句号等规范标点或干净利落的短句，非绝对必要的戏剧性突转绝不使用破折号。\n10. 【字数限制】：你的单次回复字数上限最多为 500 字左右。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
 
     try {
       const reply = await callLlm(systemPrompt, messages, text);
@@ -1021,7 +1025,8 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
 5. 【禁止擅自代位描写】：绝对禁止提前预设并擅自描写玩家未做出的动作、未作出的决定以及玩家的主观心理活动！你只能控制世界与NPC，玩家的行为必须由玩家亲自输入。
 6. 【角色信息差约束（严禁NPC开天眼）】：NPC角色间必须存在真实的信息差。若某角色不在现场且玩家未主动告知，该角色绝不知晓玩家的单独行动与隐秘举动。
 7. 【严禁NPC直白背诵法则】：角色不可直白地以系统化/说明书式的口吻背诵或提及世界法则与铁律。
-8. 【严禁直白提及数值】：严禁输出具体数值（如生命值、好感度、伤害点数等），必须全部转化为神态、伤情、语气等细腻沉浸的文学描写。\n9. 【字数限制】：你的单次回复字数上限最多为 500 字左右。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
+8. 【严禁直白提及数值】：严禁输出具体数值（如生命值、好感度、伤害点数等），必须全部转化为神态、伤情、语气等细腻沉浸的文学描写。
+9. 【减少破折号的使用】：严格克制并极力减少破折号（“——”或“—”）的使用，严禁滥用破折号制造刻意的文学停顿、心理拉扯感或故弄玄虚；叙事与对话多采用逗号、句号等规范标点或干净利落的短句，非绝对必要的戏剧性突转绝不使用破折号。\n10. 【字数限制】：你的单次回复字数上限最多为 500 字左右。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
 
     try {
       const reply = await callLlm(systemPrompt, historyBefore, editedContent);
@@ -1654,103 +1659,6 @@ ${currentSession.outline}
         )}
       </AnimatePresence>
 
-      {/* Session Delete Confirmation Dialog */}
-      <AnimatePresence>
-        {sessionToDeleteId && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setSessionToDeleteId(null)}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs"
-            />
-            <motion.div
-              initial={{ scale: 0.95, y: 15, opacity: 0 }}
-              animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.95, y: 15, opacity: 0 }}
-              className="bg-white rounded-2xl p-5 max-w-sm w-full border border-slate-100 shadow-2xl relative z-10 space-y-4"
-            >
-              <div className="flex items-start space-x-3">
-                <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500 shrink-0">
-                  <AlertCircle size={20} />
-                </div>
-                <div>
-                  <h4 className="text-xs font-black text-slate-800">确认删除该存档吗？</h4>
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    此操作将彻底删除该文游存档和所有对话记录，且数据无法恢复。
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-2 justify-end text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => setSessionToDeleteId(null)}
-                  className="px-3.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg cursor-pointer font-bold"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={confirmDeleteSession}
-                  className="px-3.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg cursor-pointer font-bold"
-                >
-                  确定删除
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Message Delete Confirmation Dialog */}
-      <AnimatePresence>
-        {messageToDeleteId && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setMessageToDeleteId(null)}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs"
-            />
-            <motion.div
-              initial={{ scale: 0.95, y: 15, opacity: 0 }}
-              animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.95, y: 15, opacity: 0 }}
-              className="bg-white rounded-2xl p-5 max-w-sm w-full border border-slate-100 shadow-2xl relative z-10 space-y-4"
-            >
-              <div className="flex items-start space-x-3">
-                <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500 shrink-0">
-                  <AlertCircle size={20} />
-                </div>
-                <div>
-                  <h4 className="text-xs font-black text-slate-800">确认删除这条玩家行动气泡吗？</h4>
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    仅删除这一条玩家行动气泡，该操作不可撤销。
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-2 justify-end text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => setMessageToDeleteId(null)}
-                  className="px-3.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg cursor-pointer font-bold"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={confirmDeleteMessage}
-                  className="px-3.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg cursor-pointer font-bold"
-                >
-                  确定删除
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* 1. SESSION SIDEBAR (Multiple adventure sessions manager) on the right */}
       <AnimatePresence>
@@ -1867,7 +1775,7 @@ ${currentSession.outline}
                           </div>
                         </div>
 
-                        {/* More Action Menu Trigger */}
+                        {/* 三个点功能按钮：常驻显示 (Always visible on mobile & desktop) */}
                         <div className="relative shrink-0 ml-1">
                           <button
                             type="button"
@@ -1875,14 +1783,14 @@ ${currentSession.outline}
                               e.stopPropagation();
                               setSessionMenuOpenId(isMenuOpen ? null : s.id);
                             }}
-                            className={`p-1 rounded-md transition-all cursor-pointer ${
+                            className={`p-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-center ${
                               isMenuOpen
-                                ? 'bg-slate-200 text-slate-700 opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 hover:bg-slate-200 text-slate-400 hover:text-slate-700'
+                                ? 'bg-indigo-100 text-indigo-700'
+                                : 'text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 active:bg-slate-200'
                             }`}
                             title="剧本操作选项"
                           >
-                            <MoreVertical size={13} />
+                            <MoreVertical size={15} />
                           </button>
                         </div>
                       </div>
@@ -1891,11 +1799,14 @@ ${currentSession.outline}
                       {isMenuOpen && (
                         <div
                           onClick={(e) => e.stopPropagation()}
-                          className="absolute right-2 top-10 z-50 w-44 bg-white rounded-xl shadow-xl border border-slate-200 py-1 text-xs text-slate-700 animate-in fade-in zoom-in-95 duration-100"
+                          className="absolute right-2 top-11 z-50 w-44 bg-white rounded-xl shadow-xl border border-slate-200 py-1 text-xs text-slate-700 animate-in fade-in zoom-in-95 duration-100"
                         >
                           <button
                             type="button"
-                            onClick={(e) => handleExportSessionSave(s, e)}
+                            onClick={(e) => {
+                              setSessionMenuOpenId(null);
+                              handleExportSessionSave(s, e);
+                            }}
                             className="w-full text-left px-3 py-2 hover:bg-indigo-50 hover:text-indigo-600 flex items-center space-x-2 transition-colors cursor-pointer"
                           >
                             <FileDown size={14} className="text-indigo-500" />
@@ -1903,7 +1814,10 @@ ${currentSession.outline}
                           </button>
                           <button
                             type="button"
-                            onClick={(e) => handleExportSessionStory(s, e)}
+                            onClick={(e) => {
+                              setSessionMenuOpenId(null);
+                              handleExportSessionStory(s, e);
+                            }}
                             className="w-full text-left px-3 py-2 hover:bg-emerald-50 hover:text-emerald-600 flex items-center space-x-2 transition-colors cursor-pointer"
                           >
                             <FileText size={14} className="text-emerald-500" />
@@ -1938,6 +1852,104 @@ ${currentSession.outline}
         )}
       </AnimatePresence>
 
+      {/* Session Delete Confirmation Dialog (Highest priority z-index to overlay above sidebar drawer and all views) */}
+      <AnimatePresence>
+        {sessionToDeleteId && (
+          <div className="absolute inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSessionToDeleteId(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs"
+            />
+            <motion.div
+              initial={{ scale: 0.95, y: 15, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.95, y: 15, opacity: 0 }}
+              className="bg-white rounded-2xl p-5 max-w-sm w-full border border-slate-100 shadow-2xl relative z-10 space-y-4"
+            >
+              <div className="flex items-start space-x-3">
+                <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500 shrink-0">
+                  <AlertCircle size={20} />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-slate-800">确认删除该存档吗？</h4>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    此操作将彻底删除该文游存档和所有对话记录，且数据无法恢复。
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2 justify-end text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setSessionToDeleteId(null)}
+                  className="px-3.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg cursor-pointer font-bold"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteSession}
+                  className="px-3.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg cursor-pointer font-bold"
+                >
+                  确定删除
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Message Delete Confirmation Dialog */}
+      <AnimatePresence>
+        {messageToDeleteId && (
+          <div className="absolute inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setMessageToDeleteId(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs"
+            />
+            <motion.div
+              initial={{ scale: 0.95, y: 15, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.95, y: 15, opacity: 0 }}
+              className="bg-white rounded-2xl p-5 max-w-sm w-full border border-slate-100 shadow-2xl relative z-10 space-y-4"
+            >
+              <div className="flex items-start space-x-3">
+                <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500 shrink-0">
+                  <AlertCircle size={20} />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-slate-800">确认删除这条玩家行动气泡吗？</h4>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    仅删除这一条玩家行动气泡，该操作不可撤销。
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2 justify-end text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setMessageToDeleteId(null)}
+                  className="px-3.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg cursor-pointer font-bold"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteMessage}
+                  className="px-3.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg cursor-pointer font-bold"
+                >
+                  确定删除
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* GM Memory Modal */}
       {activeSessionId && (
         <GmMemoryModal
@@ -1961,7 +1973,7 @@ ${currentSession.outline}
             initial={{ opacity: 0, y: -20, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.9 }}
-            className={`absolute top-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl shadow-lg text-xs font-bold flex items-center space-x-2 text-white border pointer-events-none ${
+            className={`absolute top-5 left-1/2 -translate-x-1/2 z-[120] px-4 py-2.5 rounded-xl shadow-lg text-xs font-bold flex items-center space-x-2 text-white border pointer-events-none ${
               toast.type === 'error'
                 ? 'bg-red-600 border-red-500'
                 : 'bg-slate-900 border-slate-800'
