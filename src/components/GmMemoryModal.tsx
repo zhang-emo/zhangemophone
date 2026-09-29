@@ -29,6 +29,7 @@ interface GmMemoryModalProps {
   onAutoExtract: (currentLocalMemory?: GmAdventureMemory) => Promise<GmAdventureMemory | null | void>;
   isExtracting: boolean;
   sessionTitle: string;
+  playerTurnCount?: number;
 }
 
 type TabType = 'worldRules' | 'characterStates' | 'activeQuests' | 'majorChronicles';
@@ -40,7 +41,8 @@ export default function GmMemoryModal({
   onSave,
   onAutoExtract,
   isExtracting,
-  sessionTitle
+  sessionTitle,
+  playerTurnCount
 }: GmMemoryModalProps) {
   const [activeTab, setActiveTab] = useState<TabType>('worldRules');
   const [localMemory, setLocalMemory] = useState<GmAdventureMemory>(() => sanitizeAndMigrateGmMemory(memory));
@@ -257,24 +259,49 @@ export default function GmMemoryModal({
         </div>
 
         {/* Interval Frequency Settings Bar - Horizontal above category selection */}
-        <div className="px-4 sm:px-6 py-2 bg-slate-50/90 border-b border-slate-200/70 flex items-center justify-between gap-3 shrink-0">
+        <div className="px-4 sm:px-6 py-2 bg-slate-50/90 border-b border-slate-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
           <div className="flex items-center space-x-2 shrink-0">
             <Sliders size={13} className="text-indigo-600 shrink-0" />
             <label htmlFor="gm-summary-interval-select" className="text-xs font-bold text-slate-700 cursor-pointer whitespace-nowrap">
               自动提炼记忆频次
             </label>
           </div>
-          <div className="flex-1 max-w-sm">
+          <div className="flex items-center gap-2 max-w-sm w-full">
             <select
               id="gm-summary-interval-select"
               value={localMemory.summaryIntervalRounds || 6}
-              onChange={(e) => setLocalMemory(prev => ({ ...prev, summaryIntervalRounds: Number(e.target.value) }))}
+              onChange={(e) => {
+                const newInterval = Number(e.target.value);
+                const updated = sanitizeAndMigrateGmMemory({ ...localMemory, summaryIntervalRounds: newInterval });
+                setLocalMemory(updated);
+                onSave(updated);
+              }}
               className="w-full h-8 px-3 py-1 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-all cursor-pointer shadow-xs"
             >
-              <option value={8}>经济模式（8轮、适合长篇游玩）</option>
-              <option value={6}>均衡模式（6轮、推荐默认模式）</option>
-              <option value={4}>密集模式（4轮、适合剧情极密集反转）</option>
+              <option value={8}>经济模式（每 8 轮自动总结）</option>
+              <option value={6}>均衡模式（每 6 轮自动总结 · 默认推荐）</option>
+              <option value={4}>密集模式（每 4 轮自动总结 · 紧凑感知）</option>
             </select>
+          </div>
+        </div>
+
+        {/* Round Progress Tracker */}
+        <div className="px-4 sm:px-6 py-1.5 bg-indigo-50/50 border-b border-indigo-100/60 flex items-center justify-between text-[11px] text-slate-600 shrink-0">
+          <div className="flex items-center space-x-1.5 font-medium text-slate-700">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            <span>当前进度：玩家第 <strong className="text-indigo-700 font-bold">{playerTurnCount ?? 0}</strong> 轮</span>
+            <span className="text-slate-300">|</span>
+            <span>上次同步：第 {localMemory.lastUpdatedRound || 0} 轮</span>
+          </div>
+          <div className="flex items-center space-x-1.5 font-semibold text-indigo-700">
+            <span>下次自动同步：第 {(localMemory.lastUpdatedRound || 0) + (localMemory.summaryIntervalRounds || 6)} 轮</span>
+            {playerTurnCount !== undefined && (
+              <span className="px-1.5 py-0.2 rounded-md bg-indigo-100 text-indigo-800 text-[10px] font-bold">
+                {((localMemory.lastUpdatedRound || 0) + (localMemory.summaryIntervalRounds || 6)) <= playerTurnCount
+                  ? '即将触发'
+                  : `剩 ${((localMemory.lastUpdatedRound || 0) + (localMemory.summaryIntervalRounds || 6)) - playerTurnCount} 轮`}
+              </span>
+            )}
           </div>
         </div>
 

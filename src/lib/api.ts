@@ -37,6 +37,43 @@ export function cleanTextForPrompt(text: string): string {
   return cleaned;
 }
 
+/**
+ * Clean excessive em-dashes and convert broken AI mannerisms into natural punctuation:
+ * 1. Line-ending trailing dashes: `很轻——` -> `很轻。`
+ * 2. Intra-sentence phrase-chopping dashes: `指尖——在方向盘上——敲了三下——` -> `指尖，在方向盘上，敲了三下。`
+ * 3. Clause-separating dashes: `他看着她走到侧门——刷卡——门开了——` -> `他看着她走到侧门，刷卡，门开了。`
+ */
+export function removeExcessiveDashes(text: string): string {
+  if (!text) return '';
+  return text
+    .split('\n')
+    .map(line => {
+      let l = line.trimEnd();
+      if (!l) return '';
+
+      // Strip multiple trailing dashes at end of line and add period if line doesn't end with punctuation
+      l = l.replace(/(?:——|—|--)+\s*$/g, (match, offset, str) => {
+        const preceding = str.slice(0, offset).trimEnd();
+        if (/[，。！？；…~”’」）]$/.test(preceding)) {
+          return '';
+        }
+        return '。';
+      });
+
+      // Replace intra-phrase dashes connecting words with natural comma
+      l = l.replace(/([^\s，。！？、…])\s*(?:——|—|--)+\s*([^\s，。！？、…])/g, '$1，$2');
+
+      // Strip any remaining dashes
+      l = l.replace(/(?:——|—|--)+/g, '，');
+
+      // Normalize punctuation clusters like `，，`, `，。`, `。。`
+      l = l.replace(/，+/g, '，').replace(/。+/g, '。').replace(/，。/g, '。').replace(/。，/g, '。');
+
+      return l;
+    })
+    .join('\n');
+}
+
 export function withTimeout<T>(promise: Promise<T>, ms: number = 35000, errorMsg = '请求超时，请检查网络或代理设置'): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<T>((_, reject) => {
@@ -578,7 +615,8 @@ export async function generateAiReply(
 
   systemPrompt += `=== 交互辅助信息 ===\n`;
   systemPrompt += `- 请在对话中展示你的独特语气 and 动作表情，保持第一人称回答。\n`;
-  systemPrompt += `- 回复内容请精简适中，符合手机即时通信聊天界面（KakaoTalk样式）阅读。\n\n`;
+  systemPrompt += `- 回复内容请精简适中，符合手机即时通信聊天界面（KakaoTalk样式）阅读。\n`;
+  systemPrompt += `【标点铁律：绝对禁止破折号】：严禁在任何描写、动作、心理或对话中使用破折号（“——”或“—”）！绝对禁止使用破折号断句、碎句或在行尾使用破折号！所有停顿与分句请使用逗号（，），收尾请使用句号（。）或自然换行。全篇出现的破折号数量必须为 0！\n\n`;
 
   // AI Time Perception Prompt
   if (extraOptions?.timePerceptionEnabled !== false) {
@@ -700,7 +738,7 @@ export async function generateAiReply(
       }
     }
 
-    return replyStr;
+    return removeExcessiveDashes(replyStr);
   } catch (err: any) {
     if (imageUrl) {
       console.warn("Multimodal request exception, falling back to text-only mode...", err);
@@ -885,7 +923,7 @@ export async function generateGroupMemberReply(
       throw new Error('未能在返回的 JSON 中解析到有效消息文本。');
     }
 
-    return replyStr.trim();
+    return removeExcessiveDashes(replyStr.trim());
   } catch (err: any) {
     if (imageUrl) {
       console.warn("Multimodal group request exception, falling back to text-only mode...", err);
@@ -1644,8 +1682,8 @@ export function sanitizeAndMigrateGmMemory(mem?: any): GmAdventureMemory {
     characterStates,
     activeQuests,
     majorChronicles,
-    lastUpdatedRound: typeof mem.lastUpdatedRound === 'number' ? mem.lastUpdatedRound : 0,
-    summaryIntervalRounds: typeof mem.summaryIntervalRounds === 'number' ? mem.summaryIntervalRounds : 6,
+    lastUpdatedRound: Number(mem.lastUpdatedRound) || 0,
+    summaryIntervalRounds: Number(mem.summaryIntervalRounds) || 6,
     lockedItems: Array.from(lockedSet)
   };
 }

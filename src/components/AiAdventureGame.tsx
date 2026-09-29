@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import mammoth from 'mammoth';
 import { dbInstance } from '../lib/db';
-import { getEffectiveModel, formatGmAdventureMemoryPrompt, extractGmAdventureMemory, callOpenAIEndpoint, getFallbackApiKey, withTimeout, sanitizeAndMigrateGmMemory } from '../lib/api';
+import { getEffectiveModel, formatGmAdventureMemoryPrompt, extractGmAdventureMemory, callOpenAIEndpoint, getFallbackApiKey, withTimeout, sanitizeAndMigrateGmMemory, removeExcessiveDashes } from '../lib/api';
 import { GmAdventureMemory } from '../lib/types';
 import { GoogleGenAI } from '@google/genai';
 import GmMemoryModal from './GmMemoryModal';
@@ -664,7 +664,7 @@ export default function AiAdventureGame({
         max_tokens: 4000
       });
 
-      return data.choices?.[0]?.message?.content || 'GM 未能回应';
+      return removeExcessiveDashes(data.choices?.[0]?.message?.content || 'GM 未能回应');
     } else {
       // Fallback: system Gemini SDK or API key
       const fallbackApiKey = getFallbackApiKey();
@@ -690,7 +690,7 @@ export default function AiAdventureGame({
         'GM 响应超时，请重试或在系统设置中配置自定义代理 API。'
       );
 
-      return response.text || 'GM 未能产生回响';
+      return removeExcessiveDashes(response.text || 'GM 未能产生回响');
     }
   };
 
@@ -774,7 +774,7 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
 7. 【角色信息差约束（严禁NPC开天眼）】：NPC角色间必须存在真实的信息差。若某角色不在现场且玩家未主动告知，该角色绝不知晓玩家的单独行动与隐秘举动。
 8. 【严禁NPC直白背诵法则】：角色不可直白地以系统化/说明书式的口吻背诵或提及世界法则与铁律。
 9. 【严禁直白提及数值】：严禁输出具体数值（如生命值、好感度、伤害点数等），必须全部转化为神态、伤情、语气等细腻沉浸的文学描写。
-10. 【减少破折号的使用】：严格克制并极力减少破折号（“——”或“—”）的使用，严禁滥用破折号制造刻意的文学停顿、心理拉扯感或故弄玄虚；叙事与对话多采用逗号、句号等规范标点或干净利落的短句，非绝对必要的戏剧性突转绝不使用破折号。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
+10. 【标点铁律：绝对禁止破折号（最高优先级禁令）】：严禁在任何环境描写、动作、心理或对话中使用破折号（“——”或“—”）！绝对禁止使用破折号断句或碎句（例如严禁输出“车门关了——”、“指尖——敲了三下——”），绝对禁止在句尾带破折号！所有停顿与分句必须使用逗号（，），收尾必须使用句号（。）或自然换行。全篇出现的破折号数量必须为 0！\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
 
     const userPrompt = `我已经准备好了。请充当GM阅读我的游戏大纲和设定，开始我的冒险！请先向我生动细致地介绍游戏的开局背景和初始场景，并引导我进行第一个行动或选择。`;
 
@@ -881,7 +881,7 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
 6. 【角色信息差约束（严禁NPC开天眼）】：NPC角色间必须存在真实的信息差。若某角色不在现场且玩家未主动告知，该角色绝不知晓玩家的单独行动与隐秘举动。
 7. 【严禁NPC直白背诵法则】：角色不可直白地以系统化/说明书式的口吻背诵或提及世界法则与铁律。
 8. 【严禁直白提及数值】：严禁输出具体数值（如生命值、好感度、伤害点数等），必须全部转化为神态、伤情、语气等细腻沉浸的文学描写。
-9. 【减少破折号的使用】：严格克制并极力减少破折号（“——”或“—”）的使用，严禁滥用破折号制造刻意的文学停顿、心理拉扯感或故弄玄虚；叙事与对话多采用逗号、句号等规范标点或干净利落的短句，非绝对必要的戏剧性突转绝不使用破折号。\n10. 【字数限制】：你的单次回复字数上限最多为 500 字左右。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
+9. 【标点铁律：绝对禁止破折号（最高优先级禁令）】：严禁在任何环境描写、动作、心理或对话中使用破折号（“——”或“—”）！绝对禁止使用破折号断句或碎句（例如严禁输出“车门关了——”、“指尖——敲了三下——”），绝对禁止在句尾带破折号！所有停顿与分句必须使用逗号（，），收尾必须使用句号（。）或自然换行。全篇出现的破折号数量必须为 0！\n10. 【字数限制】：你的单次回复字数上限最多为 500 字左右。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
 
     try {
       const reply = await callLlm(systemPrompt, messages, text);
@@ -934,9 +934,9 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
               
             saveMemoryToLocal(activeSessionId, extracted);
             if (!isIdentical) {
-              showToast('[GM 记忆库已同步最新剧情事实]');
+              showToast(`[第 ${playerTurnCount} 轮 GM 记忆库已同步最新剧情事实]`);
             } else {
-              console.log('Auto extract returned identical memory, waiting for next interval.');
+              showToast(`[第 ${playerTurnCount} 轮 GM 记忆核对完毕，剧情事实保持一致]`);
             }
           })
           .catch((err) => {
@@ -1026,7 +1026,7 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
 6. 【角色信息差约束（严禁NPC开天眼）】：NPC角色间必须存在真实的信息差。若某角色不在现场且玩家未主动告知，该角色绝不知晓玩家的单独行动与隐秘举动。
 7. 【严禁NPC直白背诵法则】：角色不可直白地以系统化/说明书式的口吻背诵或提及世界法则与铁律。
 8. 【严禁直白提及数值】：严禁输出具体数值（如生命值、好感度、伤害点数等），必须全部转化为神态、伤情、语气等细腻沉浸的文学描写。
-9. 【减少破折号的使用】：严格克制并极力减少破折号（“——”或“—”）的使用，严禁滥用破折号制造刻意的文学停顿、心理拉扯感或故弄玄虚；叙事与对话多采用逗号、句号等规范标点或干净利落的短句，非绝对必要的戏剧性突转绝不使用破折号。\n10. 【字数限制】：你的单次回复字数上限最多为 500 字左右。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
+9. 【标点铁律：绝对禁止破折号（最高优先级禁令）】：严禁在任何环境描写、动作、心理或对话中使用破折号（“——”或“—”）！绝对禁止使用破折号断句或碎句（例如严禁输出“车门关了——”、“指尖——敲了三下——”），绝对禁止在句尾带破折号！所有停顿与分句必须使用逗号（，），收尾必须使用句号（。）或自然换行。全篇出现的破折号数量必须为 0！\n10. 【字数限制】：你的单次回复字数上限最多为 500 字左右。\n\n【最高优先级警告（防代写越权）】：绝对不可以代替玩家说话，绝对不可以代写玩家的心理活动（如“你心想”、“你觉得”），绝对不可以替玩家做出任何实质性动作与决定！你的描述必须在玩家将要做出行动的那一刻戛然而止，把操作权与心理体验完全留给玩家！`;
 
     try {
       const reply = await callLlm(systemPrompt, historyBefore, editedContent);
@@ -1077,7 +1077,9 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
               
             saveMemoryToLocal(activeSessionId, extracted);
             if (!isIdentical) {
-              showToast('[GM 记忆库已同步最新剧情事实]');
+              showToast(`[第 ${playerTurnCount} 轮 GM 记忆库已同步最新剧情事实]`);
+            } else {
+              showToast(`[第 ${playerTurnCount} 轮 GM 记忆核对完毕，剧情事实保持一致]`);
             }
           })
           .catch((err) => {
@@ -1200,11 +1202,15 @@ ${currentSession.outline}
                 <button
                   type="button"
                   onClick={() => setShowMemoryModal(true)}
-                  className="h-8 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-black transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs"
+                  className={`h-8 px-3 rounded-xl ${isAutoExtracting ? 'bg-indigo-600 text-white animate-pulse' : 'bg-slate-900 hover:bg-slate-800 text-white'} text-[10px] font-black transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs`}
                   title="查看/编辑 GM 记忆库 (防遗忘/防前后矛盾)"
                 >
-                  <Brain size={12} className="text-amber-400 stroke-[2.5]" />
-                  <span>GM记忆</span>
+                  {isAutoExtracting ? (
+                    <Loader2 size={12} className="animate-spin text-amber-300" />
+                  ) : (
+                    <Brain size={12} className="text-amber-400 stroke-[2.5]" />
+                  )}
+                  <span>{isAutoExtracting ? '记忆同步中...' : 'GM记忆'}</span>
                   {(gmMemory.worldRules?.length || 0) +
                     (gmMemory.characterStates?.length || 0) +
                     (gmMemory.activeQuests?.length || 0) +
@@ -1963,6 +1969,7 @@ ${currentSession.outline}
           onAutoExtract={handleManualExtractMemory}
           isExtracting={isExtractingMemory}
           sessionTitle={sessions.find(s => s.id === activeSessionId)?.title || ''}
+          playerTurnCount={messages.filter(m => m.role === 'user').length}
         />
       )}
 
