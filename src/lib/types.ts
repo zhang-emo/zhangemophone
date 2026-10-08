@@ -39,6 +39,7 @@ export interface ChatMessage {
   replyToContent?: string; // Content of the message being replied to
   replyToSender?: string;  // Sender name of the message being replied to
   isRecalled?: boolean;    // If this message has been recalled by the user
+  hasReEdited?: boolean;   // If the recalled message has been clicked to re-edit
 }
 
 export interface MemoryEntry {

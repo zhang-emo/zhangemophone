@@ -341,6 +341,7 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const groupAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const wardrobeInputRef = useRef<HTMLInputElement | null>(null);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
   // Helper to compress uploaded images to prevent bloated storage
@@ -1201,6 +1202,111 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
     }
   };
 
+  // Trigger group member AI replies to group system notices (e.g. join notification)
+  const triggerGroupReplyForNotification = async (
+    systemMsg: ChatMessage,
+    sessionOverride?: ChatSession
+  ) => {
+    const session = sessionOverride || activeSession;
+    if (!session || !session.isGroup) return;
+    const targetChatId = session.id;
+
+    const activeParticipants = session.participants || [];
+    if (activeParticipants.length === 0) return;
+
+    setIsAiReplying(true);
+
+    try {
+      let queue: string[] = [];
+      if (speakerMode === 'loop') {
+        queue = [...activeParticipants];
+      } else if (speakerMode === 'random') {
+        const count = Math.min(activeParticipants.length, Math.max(2, Math.ceil(activeParticipants.length / 2)));
+        const shuffled = [...activeParticipants].sort(() => 0.5 - Math.random());
+        queue = shuffled.slice(0, count);
+      } else {
+        queue = [speakerMode];
+      }
+
+      for (let i = 0; i < queue.length; i++) {
+        const charId = queue[i];
+        const charDetails = getParticipantDetails(charId);
+
+        setTypingCharacter({
+          name: charDetails.name,
+          avatar: charDetails.avatar
+        });
+
+        const currentHistory = await dbInstance.getMessages(targetChatId);
+        const allGroupAis = activeParticipants.map(id => {
+          const detail = getParticipantDetails(id);
+          return { id: detail.id, name: detail.name, avatar: detail.avatar };
+        });
+
+        const userStickers = localSandboxImages
+          .filter(img => img.name.startsWith('sticker_'))
+          .map(img => img.name);
+
+        const replyText = await generateGroupMemberReply(
+          targetChatId,
+          charDetails.id,
+          charDetails.name,
+          getSystemMemoryPrompt(charDetails),
+          charDetails.worldBook || session.worldBook,
+          currentHistory,
+          allGroupAis,
+          undefined,
+          userStickers,
+          {
+            narrationModeEnabled: charDetails.narrationModeEnabled ?? session.narrationModeEnabled,
+            narrationRuleText: charDetails.narrationRuleText || session.narrationRuleText
+          }
+        );
+
+        const textParts = replyText
+          .split(/\r?\n/)
+          .map((p: string) => p.trim())
+          .filter((p: string) => p.length > 0);
+
+        if (textParts.length === 0) {
+          textParts.push(replyText || '...');
+        }
+
+        for (let k = 0; k < textParts.length; k++) {
+          const assistantMessage: ChatMessage = {
+            id: `ai_msg_g_${Date.now()}_${i}_${k}`,
+            chatId: targetChatId,
+            role: 'assistant',
+            senderName: charDetails.name,
+            senderAvatar: charDetails.avatar,
+            content: textParts[k],
+            timestamp: Date.now() + k
+          };
+
+          await dbInstance.saveMessage(assistantMessage);
+          setMessages((prev) => [...prev, assistantMessage]);
+
+          if (k < textParts.length - 1) {
+            await new Promise((r) => setTimeout(r, 450));
+          }
+        }
+
+        if (i < queue.length - 1) {
+          setTypingCharacter(null);
+          await new Promise((r) => setTimeout(r, 650));
+        }
+      }
+
+      await reloadSessionsAndLastMsgs();
+    } catch (err: any) {
+      console.error('[triggerGroupReplyForNotification] Error:', err);
+      setErrorMessage(err.message || '群成员回复入群通知遇到异常，请核对API配置。');
+    } finally {
+      setIsAiReplying(false);
+      setTypingCharacter(null);
+    }
+  };
+
   // Handle Creating Multi-member AI Group chat
   const handleGroupChatSave = async (group: {
     title: string;
@@ -1265,7 +1371,13 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
       setSpeakerMode('loop');
       setShowCreateGroupModal(false);
       setCurrentTab('chats');
+      setMessages([welcomeNotif]);
       console.log('[ChatView] Group chat initiation completely finished and UI synchronized.');
+
+      // Automatically trigger group members to reply to the new group creation & join notification
+      setTimeout(() => {
+        triggerGroupReplyForNotification(welcomeNotif, newGroupSession);
+      }, 400);
     } catch (e) {
       console.error('[ChatView] Critical Error during handleGroupChatSave:', e);
       alert('创建群聊遭遇异常，请查看开发者控制台获取更多详细日志。');
@@ -1360,6 +1472,11 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
       setMessages(updatedMessages);
 
       console.log('[ChatView] Group chat invitation successfully processed and synced.');
+
+      // Automatically trigger group members to reply and welcome new members
+      setTimeout(() => {
+        triggerGroupReplyForNotification(welcomeNotif, updatedSession);
+      }, 400);
     } catch (e) {
       console.error('[ChatView] Error inviting members:', e);
       alert('添加成员遭遇异常。');
@@ -1387,6 +1504,8 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
 
   const handleRecallMessage = async (msg: ChatMessage) => {
     setActiveMenuMessageId(null);
+    setIsAiReplying(false);
+    setTypingCharacter(null);
     const updatedMsg: ChatMessage = {
       ...msg,
       isRecalled: true,
@@ -3212,14 +3331,26 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
           <div key={msg.id} id={`msg-${msg.id}`} className="flex justify-center my-2.5 px-6 text-center select-none w-full animate-fade-in">
             <span className="px-3 py-1 bg-black/10 text-white/90 text-[10px] rounded-full leading-normal font-sans inline-flex items-center space-x-1.5 max-w-[90%] font-semibold shadow-sm">
               <span>{isUser ? '你撤回了一条消息' : `"${sender}" 撤回了一条消息`}</span>
-              {isUser && (
+              {isUser && !msg.hasReEdited && (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     let rawText = msg.content;
                     const regex = /\[📎 附图: \/images\/(.+?)\]/;
                     rawText = rawText.replace(regex, '').trim();
                     setNewMessage(rawText);
+                    chatInputRef.current?.focus();
+
+                    const updatedMsg: ChatMessage = {
+                      ...msg,
+                      hasReEdited: true,
+                    };
+                    try {
+                      await dbInstance.saveMessage(updatedMsg);
+                      setMessages((prev) => prev.map((m) => (m.id === msg.id ? updatedMsg : m)));
+                    } catch (err) {
+                      console.error('Failed to update re-edited status:', err);
+                    }
                   }}
                   className="ml-1 text-[#FEE500] hover:underline font-extrabold focus:outline-none transition-all cursor-pointer active:scale-95"
                 >
@@ -3233,10 +3364,31 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
       }
 
       if (msg.role === 'system') {
+        const isJoinNotice = activeSession?.isGroup && (
+          msg.content.includes('入群') ||
+          msg.content.includes('加入群聊') ||
+          msg.content.includes('创建成功')
+        );
+
         elements.push(
-          <div key={msg.id} id={`msg-${msg.id}`} className="flex justify-center my-4 px-6 text-center select-none w-full">
-            <span className="px-3.5 py-1 bg-black/15 text-white text-[10px] font-bold rounded-full leading-normal font-sans inline-block max-w-[90%] break-all">
-              {msg.content}
+          <div key={msg.id} id={`msg-${msg.id}`} className="flex justify-center my-3.5 px-6 text-center select-none w-full animate-fade-in">
+            <span className="px-3.5 py-1.5 bg-black/15 text-white text-[10px] font-bold rounded-full leading-normal font-sans inline-flex items-center space-x-1.5 max-w-[95%] break-all shadow-xs">
+              <span>{msg.content}</span>
+              {isJoinNotice && (
+                <button
+                  type="button"
+                  disabled={isAiReplying || !!typingCharacter}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    triggerGroupReplyForNotification(msg);
+                  }}
+                  className="ml-1.5 px-2 py-0.5 bg-[#FEE500] hover:bg-[#ffe817] text-[#3C1E1E] text-[10px] font-black rounded-full transition-all cursor-pointer active:scale-95 disabled:opacity-50 inline-flex items-center space-x-1 shadow-sm shrink-0"
+                  title="让群聊中的AI成员回复该入群通知"
+                >
+                  <Bot size={10} className="stroke-[2.5px]" />
+                  <span>让AI回复</span>
+                </button>
+              )}
             </span>
           </div>
         );
@@ -3875,6 +4027,7 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
               </div>
 
               <input
+                ref={chatInputRef}
                 type="text"
                 value={newMessage}
                 onChange={(e) => handleInputChange(e.target.value)}

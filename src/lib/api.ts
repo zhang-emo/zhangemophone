@@ -338,7 +338,7 @@ async function getTriggeredWorldBookEntries(userPrompt: string, history: ChatMes
     const config = await dbInstance.getWorldBookConfig();
     const recentTexts = [
       userPrompt,
-      ...history.slice(-10).map(m => m.content)
+      ...history.filter(m => !m.isRecalled && m.role !== 'system').slice(-10).map(m => m.content)
     ].join('\n').toLowerCase();
 
     // 1. Static background entries from WorldBook entries (entryType === 'static')
@@ -674,8 +674,22 @@ export async function generateAiReply(
     { role: 'system', content: systemPrompt }
   ];
 
+  // Exclude recalled messages and system notices from LLM context
+  const validHistory = history.filter(m => !m.isRecalled && m.role !== 'system');
+
+  // Check if caller already saved and appended the active user message to history
+  let priorHistory = validHistory;
+  if (
+    priorHistory.length > 0 &&
+    priorHistory[priorHistory.length - 1].role === 'user' &&
+    cleanTextForPrompt(priorHistory[priorHistory.length - 1].content).trim() === cleanTextForPrompt(userMessageContent).trim()
+  ) {
+    // Exclude it from priorHistory so it is only added once at the end as lastContent
+    priorHistory = priorHistory.slice(0, -1);
+  }
+
   // Append recent context window (limit to latest 15 messages for high responsiveness and cost savings)
-  const windowedHistory = history.slice(-15);
+  const windowedHistory = priorHistory.slice(-15);
   windowedHistory.forEach((msg) => {
     apiMessages.push({
       role: msg.role === 'assistant' ? 'assistant' : 'user',
@@ -683,7 +697,7 @@ export async function generateAiReply(
     });
   });
 
-  // Append current active message
+  // Append current active message (exactly once!)
   const cleanedUserContent = cleanTextForPrompt(userMessageContent);
   let lastContent: any = cleanedUserContent;
   if (imageUrl) {
@@ -846,8 +860,13 @@ export async function generateGroupMemberReply(
   systemPrompt += `5. 严禁捏造或代替其他人的发言。禁止在你的回复包里替别人说 “Muzi说...”, “Neo说...”, 你的发言包只代表你 ${characterName} 本人。\n`;
   systemPrompt += `6. 直接输出内容。不需要包含任何说明性前缀（不要写成 “[${characterName}]: 内容”），仅输出要说的心灵台词本身。\n`;
 
+  systemPrompt += `7. 【入群通知即时互动】：如果群聊最近有【群系统通知】（例如新创建群聊邀请成员入群、或有新成员加入群聊）：\n`;
+  systemPrompt += `   - 如果是你自己刚刚被邀请加入群聊：请自然地以自己的角色风格打招呼、发表进群感言（例如吐槽为什么被拉进群、询问这是什么群、或者兴奋地向大家问好）；\n`;
+  systemPrompt += `   - 如果是群内其他新成员被邀请加入群聊：群内已有成员可以主动热情欢迎新人、调侃新人或介绍群内氛围；\n`;
+  systemPrompt += `   - 如果是群聊刚刚创建成功：所有入群伙伴都可以积极进行建群破冰互动！\n\n`;
+
   if (availableStickers && availableStickers.length > 0) {
-    systemPrompt += `7. 【重要表情包互动】你在群聊中除了发送文字外，还可以发送表情包。如果你想发送以下某个表情包，请在回复中单独输出一行对应的特定格式（不要带任何其他文字，也不要捏造格式）：\n`;
+    systemPrompt += `8. 【重要表情包互动】你在群聊中除了发送文字外，还可以发送表情包。如果你想发送以下某个表情包，请在回复中单独输出一行对应的特定格式（不要带任何其他文字，也不要捏造格式）：\n`;
     systemPrompt += `[📎 附图: /images/表情包名称]\n`;
     systemPrompt += `可用的表情包文件名称如下，请严格保持其英文或下划线命名一致：\n`;
     availableStickers.forEach(name => {
@@ -867,10 +886,18 @@ export async function generateGroupMemberReply(
   ];
 
   // We feed up to 18 messages of history to keep high density and rich conversation
-  const windowedHistory = history.slice(-18);
+  // Filter out recalled messages, and format system notices (e.g. join/welcome notices) for context
+  const validGroupHistory = history.filter(m => !m.isRecalled);
+  const windowedHistory = validGroupHistory.slice(-18);
   windowedHistory.forEach((msg) => {
-    if (msg.role === 'system') return;
-    
+    if (msg.role === 'system') {
+      apiMessages.push({
+        role: 'user',
+        content: `[群系统通知]: "${cleanTextForPrompt(msg.content)}"`
+      });
+      return;
+    }
+
     const senderLabel = msg.role === 'user' 
       ? '人类' 
       : (msg.senderName || '助手');
@@ -883,7 +910,18 @@ export async function generateGroupMemberReply(
   });
 
   // Instruction prompt
+  const lastMsg = history.length > 0 ? history[history.length - 1] : null;
+  const isJoinNotification = lastMsg && lastMsg.role === 'system' && (
+    lastMsg.content.includes('入群') || 
+    lastMsg.content.includes('加入群聊') || 
+    lastMsg.content.includes('创建成功')
+  );
+
   let lastContent: any = `[系统暗示]: 请作为 ${characterName} 展开您的发言气泡。要求极具你的傲娇/治愈/傲慢特色，字数精简，直接输出内容。`;
+  if (isJoinNotification) {
+    lastContent = `[系统暗示]: 群内刚刚发出了入群/建群通知（"${cleanTextForPrompt(lastMsg.content)}"）。请作为 ${characterName}，根据你的个性对该入群通知进行即时回复与互动（如果是自己刚入群则主动自我介绍/吐槽/打招呼；如果是群里来了新人则热情欢迎或调侃新人；如果是刚建群则发表第一句建群感想），字数精简（120字内），直接输出内容。`;
+  }
+
   if (imageUrl) {
     lastContent = [
       {
@@ -1177,6 +1215,7 @@ export async function generateCharacterDiary(
 
   // Compile history snippets to give context to the AI
   const recentTexts = chatHistory
+    .filter(msg => !msg.isRecalled && msg.role !== 'system')
     .slice(-10)
     .map(msg => `${msg.role === 'user' ? '你' : characterName}: ${cleanTextForPrompt(msg.content)}`)
     .join('\n');
@@ -1307,7 +1346,12 @@ export async function generate24HourMemorySummary(
     throw new Error('最近24小时内暂无聊天记录');
   }
 
-  const conversationText = messages24h.map(m => {
+  const validMessages24h = messages24h.filter(m => !m.isRecalled && m.role !== 'system');
+  if (validMessages24h.length === 0) {
+    throw new Error('最近24小时内暂无可总结的有效聊天记录');
+  }
+
+  const conversationText = validMessages24h.map(m => {
     const sender = m.role === 'assistant' ? characterName : (m.senderName || '用户');
     return `${sender}: ${cleanTextForPrompt(m.content)}`;
   }).join('\n');
