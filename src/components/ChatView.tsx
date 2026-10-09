@@ -806,11 +806,17 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
       return {
         id: rawId,
         name: found.characterName,
+        characterName: found.characterName,
         avatar: found.characterAvatar,
         memory: found.memory,
         worldBook: found.worldBook,
         narrationModeEnabled: found.narrationModeEnabled,
-        narrationRuleText: found.narrationRuleText
+        narrationRuleText: found.narrationRuleText,
+        realName: found.realName,
+        gender: found.gender,
+        patience: found.patience,
+        relationship: found.relationship,
+        userImpression: found.userImpression
       };
     }
     const preset = PRESET_CHARACTERS.find((p) => p.id === rawId);
@@ -818,16 +824,23 @@ export default function ChatView({ onHome }: { onHome?: () => void }) {
       return {
         id: rawId,
         name: preset.characterName,
+        characterName: preset.characterName,
         avatar: preset.characterAvatar,
         memory: preset.memory,
         worldBook: preset.worldBook,
         narrationModeEnabled: preset.narrationModeEnabled,
-        narrationRuleText: preset.narrationRuleText
+        narrationRuleText: preset.narrationRuleText,
+        realName: preset.realName,
+        gender: preset.gender,
+        patience: preset.patience,
+        relationship: preset.relationship,
+        userImpression: preset.userImpression
       };
     }
     return {
       id: rawId,
       name: '神秘好友',
+      characterName: '神秘好友',
       avatar: '🤖',
       memory: '他是群里的特邀人工智能伙伴。',
       worldBook: '',

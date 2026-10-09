@@ -40,6 +40,7 @@ import {
 import { AppSettings, ApiProfile, BackupData, LocalImage } from '../lib/types';
 import { dbInstance } from '../lib/db';
 import { compressFileImage } from '../lib/imageCompressor';
+import { normalizeOpenAiBaseUrl } from '../lib/api';
 
 const POPULAR_MODELS = [
   { value: 'gpt-4o', label: 'GPT-4o (OpenAI)' },
@@ -240,7 +241,7 @@ export default function SettingsView({ onHome }: { onHome?: () => void }) {
 
     setIsTestingConnection(true);
     try {
-      const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+      const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
       const response = await fetch(`${cleanBaseUrl}/models`, {
         method: 'GET',
         headers: {
@@ -274,7 +275,7 @@ export default function SettingsView({ onHome }: { onHome?: () => void }) {
     showToast('正在尝试连接服务拉取可用模型列表...', 'success');
 
     try {
-      const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+      const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
       const response = await fetch(`${cleanBaseUrl}/models`, {
         method: 'GET',
         headers: {
@@ -660,12 +661,20 @@ export default function SettingsView({ onHome }: { onHome?: () => void }) {
 
             {/* 1.3 Base URL Input */}
             <div className="space-y-2 pb-3 border-b border-gray-100">
-              <label className="text-xs font-bold text-gray-700 block">代理终端地址 (Base URL)</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-gray-700 block">代理终端地址 (Base URL)</label>
+                <span className="text-[10px] text-gray-400">通常以 /v1 结尾</span>
+              </div>
               <div className="relative">
                 <input
                   type="url"
                   value={settings.baseUrl}
                   onChange={(e) => handleFieldChange('baseUrl', e.target.value)}
+                  onBlur={() => {
+                    if (settings.baseUrl?.trim()) {
+                      handleFieldChange('baseUrl', normalizeOpenAiBaseUrl(settings.baseUrl));
+                    }
+                  }}
                   placeholder="https://api.openai.com/v1"
                   className="w-full h-10 pl-9 pr-4 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 focus:outline-none focus:border-gray-900 focus:bg-white transition-all font-mono"
                 />

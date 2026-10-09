@@ -122,6 +122,36 @@ function checkIsPackagedOrStaticHost(): boolean {
   return isNonHttpProtocol || isNativeBridge || isStaticOnlyHost;
 }
 
+export function normalizeOpenAiBaseUrl(rawBaseUrl?: string): string {
+  let url = (rawBaseUrl || 'https://api.openai.com/v1').trim();
+  if (!url) return 'https://api.openai.com/v1';
+  // Remove trailing slashes
+  url = url.replace(/\/+$/, '');
+
+  // If user inadvertently appended /chat/completions, strip it so it doesn't double-nest
+  if (url.endsWith('/chat/completions')) {
+    url = url.replace(/\/chat\/completions$/, '');
+  }
+
+  // Common OpenAI compatible domains that require /v1 suffix
+  const knownNeedV1 = [
+    'api.openai.com',
+    'api.deepseek.com',
+    'api.moonshot.cn',
+    'api.minimax.chat',
+    'api.together.xyz',
+    'api.siliconflow.cn'
+  ];
+  for (const domain of knownNeedV1) {
+    if (url.includes(domain) && !url.endsWith('/v1')) {
+      url = `${url}/v1`;
+      break;
+    }
+  }
+
+  return url;
+}
+
 export async function callOpenAIEndpoint(targetUrl: string, apiKey: string, bodyData: any): Promise<any> {
   const cleanTargetUrl = targetUrl.trim();
   const requestBodyStr = typeof bodyData === 'string' ? bodyData : JSON.stringify(bodyData);
@@ -129,15 +159,19 @@ export async function callOpenAIEndpoint(targetUrl: string, apiKey: string, body
   let response: Response | null = null;
   let responseText = '';
   let proxyError: any = null;
+  let proxyCalled = false;
+  let proxyResponse: Response | null = null;
+  let proxyText = '';
 
   // 1. Check if running in a packaged mobile app without Node server or static host
   const isPackagedOrStaticHost = checkIsPackagedOrStaticHost();
 
   if (!isPackagedOrStaticHost) {
+    proxyCalled = true;
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout for LLM inference & extraction
-      response = await fetch('/api/proxy/openai', {
+      proxyResponse = await fetch('/api/proxy/openai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -151,20 +185,29 @@ export async function callOpenAIEndpoint(targetUrl: string, apiKey: string, body
         })
       });
       clearTimeout(timeoutId);
-      responseText = await response.text();
+      proxyText = await proxyResponse.text();
+      response = proxyResponse;
+      responseText = proxyText;
     } catch (e: any) {
       proxyError = e;
     }
   }
 
   // Check if proxy returned HTML (e.g. SPA index.html fallback, 404 page, WAF block)
+  // or Vercel / serverless edge 404 NOT_FOUND text
+  const isProxy404OrVercel = proxyResponse?.status === 404 ||
+    proxyText.includes('404: NOT_FOUND') ||
+    proxyText.includes('sfo1::') ||
+    proxyText.toLowerCase().includes('not_found');
   const isProxyResponseHtml = responseText.trim().startsWith('<') || responseText.trim().toLowerCase().startsWith('<!doctype');
 
   // 2. If proxy was skipped, failed to connect, returned non-200, or returned HTML instead of JSON:
   // attempt direct fetch directly to targetUrl (works in WebView and CORS-friendly APIs)
-  const needsDirectFetch = isPackagedOrStaticHost || !response || !response.ok || isProxyResponseHtml;
+  const needsDirectFetch = isPackagedOrStaticHost || !response || !response.ok || isProxyResponseHtml || isProxy404OrVercel;
 
   let directFetchError: any = null;
+  let directFetchSuccess = false;
+
   if (needsDirectFetch) {
     try {
       const directResponse = await fetch(cleanTargetUrl, {
@@ -177,11 +220,12 @@ export async function callOpenAIEndpoint(targetUrl: string, apiKey: string, body
       });
       const directText = await directResponse.text();
       const isDirectResponseHtml = directText.trim().startsWith('<') || directText.trim().toLowerCase().startsWith('<!doctype');
-      
+
       // If direct fetch gave a non-HTML response or succeeded, adopt it
       if (directResponse.ok || (!isDirectResponseHtml && directText.trim().length > 0)) {
         response = directResponse;
         responseText = directText;
+        directFetchSuccess = true;
       } else if (!response) {
         response = directResponse;
         responseText = directText;
@@ -190,6 +234,16 @@ export async function callOpenAIEndpoint(targetUrl: string, apiKey: string, body
       directFetchError = directErr;
       console.warn("Direct browser fetch attempt failed:", directErr);
     }
+  }
+
+  // Handle case where proxy failed with 404 (e.g. Vercel static host or deleted route) AND direct fetch was blocked by CORS
+  if (proxyCalled && isProxy404OrVercel && !directFetchSuccess && directFetchError) {
+    throw new Error(
+      `反向代理服务未就绪 (404 NOT_FOUND)，且浏览器直连 API (${cleanTargetUrl}) 因跨域(CORS)限制被拦截。\n\n` +
+      `【解决指南】\n` +
+      `1. 如果项目部署在 Vercel 等静态平台：已为您创建 Vercel Serverless 代理 (/api/proxy/openai.ts)，重新推送到仓库并触发部署即可直接正常使用！\n` +
+      `2. 如果在手机【设置】中配置了自定义 Base URL：请检查 Base URL 是否正确，OpenAI 兼容接口通常必须以 /v1 结尾（例如 https://api.openai.com/v1 或 https://你的反代域名/v1）。`
+    );
   }
 
   if (!response) {
@@ -201,9 +255,20 @@ export async function callOpenAIEndpoint(targetUrl: string, apiKey: string, body
     throw new Error(`无法连接到 API 服务端 (${cleanTargetUrl})：${errorDetails || '网络连接失败，请检查 Base URL 是否正确。'}`);
   }
 
-  if (responseText.trim().startsWith('<') || responseText.trim().toLowerCase().startsWith('<!doctype')) {
+  const isHtml = responseText.trim().startsWith('<') || responseText.trim().toLowerCase().startsWith('<!doctype');
+  const isVercelError = responseText.includes('404: NOT_FOUND') || responseText.includes('sfo1::') || responseText.includes('Code: ');
+
+  if (isHtml || isVercelError) {
     if (response.status === 403) {
       throw new Error(`连接失败 (403 Forbidden)：API 服务商拒绝了访问请求。通常是因为 API Base URL (${cleanTargetUrl}) 配置有误、API Key 权限不足、或当前网络节点被服务商防火墙拦截。请检查设置中的 Base URL 和 API Key。`);
+    }
+    if (response.status === 404 || isVercelError) {
+      throw new Error(
+        `API 接口返回 404 (NOT_FOUND)：目标接口地址 (${cleanTargetUrl}) 未找到。\n\n` +
+        `【排查建议】\n` +
+        `1. Base URL 路径错误：请前往手机【设置】检查 Base URL，OpenAI 兼容接口必须以 /v1 结尾（例如 https://api.openai.com/v1 或 https://你的反代域名/v1）。若少写了 /v1，服务端会直接报 404 NOT_FOUND。\n` +
+        `2. Vercel 部署环境：若部署在 Vercel 平台，请更新代码重新部署以启用 /api/proxy/openai 后端代理。`
+      );
     }
     throw new Error(`API 返回了 HTML 网页而非 JSON 数据 (HTTP ${response.status})。请检查 API Base URL (${cleanTargetUrl}) 是否正确，或网络节点是否拦截了请求。`);
   }
@@ -212,6 +277,14 @@ export async function callOpenAIEndpoint(targetUrl: string, apiKey: string, body
   try {
     data = JSON.parse(responseText);
   } catch (err) {
+    if (responseText.includes('404: NOT_FOUND') || responseText.includes('sfo1::')) {
+      throw new Error(
+        `API 接口返回 404 (NOT_FOUND - Vercel 代码 sfo1::...)。\n\n` +
+        `【排查建议】\n` +
+        `1. Base URL 路径错误：请前往【设置】检查 Base URL，确保末尾包含 /v1（例如 https://api.openai.com/v1）。\n` +
+        `2. 如果您在 Vercel 部署：请使用包含 api/proxy/openai.ts 的最新版本重新部署以启用后端代理。`
+      );
+    }
     throw new Error(`API 返回了无效的 JSON 数据 (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
   }
 
@@ -721,7 +794,7 @@ export async function generateAiReply(
   });
 
   // 4. Send network request
-  const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+  const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
   const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
   const bodyData = {
@@ -943,7 +1016,7 @@ export async function generateGroupMemberReply(
   });
 
   // 3. Request
-  const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+  const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
   const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
   const bodyData = {
@@ -1018,7 +1091,7 @@ ${commentHistory ? `已有评论历史：\n${commentHistory}\n` : ''}
 2. 记住：所有的暧昧与偏爱只留给用户！
 3. 请直接输出评论文本本身，绝对不要带有任何说明、括号或角色名前缀。`;
 
-      const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+      const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
       const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
       const bodyData = {
@@ -1088,7 +1161,7 @@ ${isUser ? `用户（${senderLabel}）发表的评论是："${targetComment}"` :
 2. 区分对象：如果是回复用户，展现对用户的专属偏爱；如果是回复其他角色，保持普通朋友/同事的自然交流，绝不暧昧！
 3. 请直接输出回复文本本身，绝对不要带有任何说明、括号或角色名前缀。`;
 
-    const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+    const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
     const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
     const bodyData = {
@@ -1166,7 +1239,7 @@ ${characterMemory}
 3. 保证时间顺序递增（例如：从早至晚，且必须确保至少有部分行程在 ${currentTimeStr} 之后，包含未来的时间安排）。
 `;
 
-  const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+  const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
   const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
   const bodyData = {
@@ -1238,7 +1311,7 @@ ${recentTexts || '今天还没有太多对话，但在你心中他一直是很�
 4. 绝对不能带有任何 Markdown 语法标签，仅输出原生的、合法的、可直接解析的 JSON 字符串。
 `;
 
-  const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+  const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
   const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
   const bodyData = {
@@ -1303,7 +1376,7 @@ export async function generateCharacterDiaryReply(
 5. 绝对不能带有任何 Markdown 语法标签，仅输出原生的、合法的、可直接解析的 JSON 字符串。
 `;
 
-  const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+  const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
   const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
   const bodyData = {
@@ -1365,7 +1438,7 @@ export async function generate24HourMemorySummary(
 
   const userPrompt = `【与${characterName}最近24小时的真实对话记录】：\n${conversationText}\n\n请提取并生成这一天的长期记忆总结：`;
 
-  const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+  const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
   const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
   const bodyData = {
@@ -1439,7 +1512,7 @@ ${reverseRelationDescription ? `2. 【${targetChar}】对【${sourceChar}】的�
     ? `请根据上述已有的聊天记录，继续让【${sourceChar}】和【${targetChar}】续写 5-8 条最新的聊天互动。`
     : `请生成【${sourceChar}】与【${targetChar}】之间最新的一段私人聊天记录（约 6-8 条）。`;
 
-  const cleanBaseUrl = settings.baseUrl.trim().replace(/\/$/, "");
+  const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
   const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
   const bodyData = {
@@ -1538,7 +1611,7 @@ ${conversationHistory}
 
   if (userApiKey) {
     try {
-      const cleanBaseUrl = (settings.baseUrl || 'https://api.openai.com/v1').trim().replace(/\/$/, "");
+      const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
       const model = getEffectiveModel(settings);
       const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
@@ -2295,7 +2368,7 @@ ${recentHistoryStr || '游戏刚开始。'}
   // Call OpenAI endpoint if configured
   if (userApiKey) {
     try {
-      const cleanBaseUrl = (settings.baseUrl || 'https://api.openai.com/v1').trim().replace(/\/$/, "");
+      const cleanBaseUrl = normalizeOpenAiBaseUrl(settings.baseUrl);
       const model = getEffectiveModel(settings);
       const targetUrl = `${cleanBaseUrl}/chat/completions`;
 
