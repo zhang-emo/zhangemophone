@@ -63,10 +63,10 @@ const getUserAvatar = (): string => {
 };
 
 const DEFAULT_GM_MEMORY: GmAdventureMemory = {
-  worldRules: [],
-  characterStates: [],
-  activeQuests: [],
-  majorChronicles: [],
+  worldRules: ['遵循本剧本世界观的底层物理与魔法规则'],
+  characterStates: ['[主角] 当前状态良好，积极探索剧情中'],
+  activeQuests: ['[主线-进行中] 展开探索与互动，推动剧情发展'],
+  majorChronicles: ['[大事件] 序章：冒险由此开启'],
   lastUpdatedRound: 0,
   summaryIntervalRounds: 6,
   lockedItems: []
@@ -273,7 +273,14 @@ export default function AiAdventureGame({
       return null;
     }
 
-    const baseMemory = currentLocalMemory || gmMemory;
+    let baseMemory = currentLocalMemory || gmMemory;
+    try {
+      const raw = localStorage.getItem(`ai_text_adventure_memory_${activeSessionId}`);
+      if (raw) {
+        const stored = sanitizeAndMigrateGmMemory(JSON.parse(raw));
+        baseMemory = currentLocalMemory || stored || gmMemory;
+      }
+    } catch (_) {}
 
     setIsExtractingMemory(true);
     try {
@@ -726,7 +733,18 @@ export default function AiAdventureGame({
     // Extract initial structured memory from outline
     let initialMemory = DEFAULT_GM_MEMORY;
     try {
-      initialMemory = await extractGmAdventureMemory(finalOutline, [], null);
+      const extracted = await extractGmAdventureMemory(finalOutline, [], null);
+      if (extracted) {
+        initialMemory = {
+          worldRules: extracted.worldRules?.length > 0 ? extracted.worldRules : DEFAULT_GM_MEMORY.worldRules,
+          characterStates: extracted.characterStates?.length > 0 ? extracted.characterStates : DEFAULT_GM_MEMORY.characterStates,
+          activeQuests: extracted.activeQuests?.length > 0 ? extracted.activeQuests : DEFAULT_GM_MEMORY.activeQuests,
+          majorChronicles: extracted.majorChronicles?.length > 0 ? extracted.majorChronicles : DEFAULT_GM_MEMORY.majorChronicles,
+          lastUpdatedRound: extracted.lastUpdatedRound || 0,
+          summaryIntervalRounds: extracted.summaryIntervalRounds || 6,
+          lockedItems: extracted.lockedItems || []
+        };
+      }
     } catch (e) {
       console.warn('Initial GM memory extraction fallback', e);
     }
@@ -924,13 +942,21 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
         (playerTurnCount >= lastSummaryRound + intervalRounds || (lastSummaryRound === 0 && playerTurnCount >= intervalRounds))
       ) {
         setIsAutoExtracting(true);
-        extractGmAdventureMemory(currentSession.outline, finalMsgs, gmMemory)
+        let latestMem = gmMemory;
+        try {
+          const raw = localStorage.getItem(`ai_text_adventure_memory_${activeSessionId}`);
+          if (raw) {
+            latestMem = sanitizeAndMigrateGmMemory(JSON.parse(raw));
+          }
+        } catch (_) {}
+
+        extractGmAdventureMemory(currentSession.outline, finalMsgs, latestMem)
           .then((extracted) => {
             const isIdentical = 
-              JSON.stringify(extracted.worldRules) === JSON.stringify(gmMemory.worldRules) &&
-              JSON.stringify(extracted.characterStates) === JSON.stringify(gmMemory.characterStates) &&
-              JSON.stringify(extracted.activeQuests) === JSON.stringify(gmMemory.activeQuests) &&
-              JSON.stringify(extracted.majorChronicles) === JSON.stringify(gmMemory.majorChronicles);
+              JSON.stringify(extracted.worldRules) === JSON.stringify(latestMem.worldRules) &&
+              JSON.stringify(extracted.characterStates) === JSON.stringify(latestMem.characterStates) &&
+              JSON.stringify(extracted.activeQuests) === JSON.stringify(latestMem.activeQuests) &&
+              JSON.stringify(extracted.majorChronicles) === JSON.stringify(latestMem.majorChronicles);
               
             saveMemoryToLocal(activeSessionId, extracted);
             if (!isIdentical) {
@@ -1067,13 +1093,21 @@ ${memoryPromptBlock}${intimacyProtocolPromptBlock}
         (playerTurnCount >= lastSummaryRound + intervalRounds || (lastSummaryRound === 0 && playerTurnCount >= intervalRounds))
       ) {
         setIsAutoExtracting(true);
-        extractGmAdventureMemory(currentSession.outline, finalMsgs, gmMemory)
+        let latestMem = gmMemory;
+        try {
+          const raw = localStorage.getItem(`ai_text_adventure_memory_${activeSessionId}`);
+          if (raw) {
+            latestMem = sanitizeAndMigrateGmMemory(JSON.parse(raw));
+          }
+        } catch (_) {}
+
+        extractGmAdventureMemory(currentSession.outline, finalMsgs, latestMem)
           .then((extracted) => {
             const isIdentical = 
-              JSON.stringify(extracted.worldRules) === JSON.stringify(gmMemory.worldRules) &&
-              JSON.stringify(extracted.characterStates) === JSON.stringify(gmMemory.characterStates) &&
-              JSON.stringify(extracted.activeQuests) === JSON.stringify(gmMemory.activeQuests) &&
-              JSON.stringify(extracted.majorChronicles) === JSON.stringify(gmMemory.majorChronicles);
+              JSON.stringify(extracted.worldRules) === JSON.stringify(latestMem.worldRules) &&
+              JSON.stringify(extracted.characterStates) === JSON.stringify(latestMem.characterStates) &&
+              JSON.stringify(extracted.activeQuests) === JSON.stringify(latestMem.activeQuests) &&
+              JSON.stringify(extracted.majorChronicles) === JSON.stringify(latestMem.majorChronicles);
               
             saveMemoryToLocal(activeSessionId, extracted);
             if (!isIdentical) {

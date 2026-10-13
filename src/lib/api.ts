@@ -1743,6 +1743,54 @@ export function cleanMemoryItemText(text?: string | null): string {
   return sanitizeMemoryText(noLock);
 }
 
+const INVALID_PLACEHOLDERS_REGEX = /^(?:无|暂无|无新任务|暂无任务|暂无未决任务|暂无大事件|暂无重大历史事件|无重大事件|无进行中任务|当前无任务|当前暂无任务|当前无大事件|当前暂无大事件|无事件|未发生|未触发|待触发|无特殊|none|null|nil|n\/a|undefined|empty|\[\]|\{\}|-|—|\.|\/)+$/i;
+
+/**
+ * Format an arbitrary object (e.g. from LLM JSON array) into a structured memory text item
+ */
+export function formatObjectToMemoryString(item: any): string {
+  if (typeof item === 'string') return item;
+  if (!item || typeof item !== 'object') return String(item || '');
+
+  const tag = item.type || item.category || item.tag || '';
+  const prefix = tag ? (tag.startsWith('[') ? tag : `[${tag}] `) : '';
+
+  const mainTitle = item.title || item.name || item.quest || item.task || item.event || item.rule || item.topic || item.summary || '';
+  const detail = item.state || item.status || item.desc || item.description || item.progress || item.content || item.detail || item.stage || item.impact || item.result || '';
+
+  if (mainTitle && detail) {
+    return `${prefix}${mainTitle}：${detail}`;
+  } else if (mainTitle) {
+    return `${prefix}${mainTitle}`;
+  } else if (detail) {
+    return `${prefix}${detail}`;
+  }
+
+  const values = Object.values(item).filter(v => typeof v === 'string' && (v as string).trim().length > 0);
+  if (values.length > 0) {
+    return values.join('：');
+  }
+  return '';
+}
+
+/**
+ * Check if a memory text is meaningful and not a garbage placeholder (e.g. "无", "暂无", "None", "[]")
+ */
+export function isMeaningfulMemoryItem(str?: string | null): boolean {
+  if (!str) return false;
+  const cleaned = cleanMemoryItemText(str).trim();
+  if (cleaned.length < 2) return false;
+  const stripped = cleaned
+    .replace(/^\[(?:主线-进行中|支线-进行中|玩家动机|关键线索|大事件|主角|NPC:[^\]]+)\]/i, '')
+    .replace(/^【(?:主线-进行中|支线-进行中|玩家动机|关键线索|大事件|主角|NPC:[^】]+)】/i, '')
+    .replace(/^[:：\s\-*•、\d+.\s()（）]+/, '')
+    .trim();
+  if (!stripped || stripped.length < 2) return false;
+  if (INVALID_PLACEHOLDERS_REGEX.test(stripped)) return false;
+  if (/^(\{\}|\[\]|""|''|null)$/i.test(stripped)) return false;
+  return true;
+}
+
 /**
  * Migrate and sanitize GmAdventureMemory:
  * 1. Strips any legacy '🔒' or '🔓' emoji from text strings
@@ -1766,7 +1814,7 @@ export function sanitizeAndMigrateGmMemory(mem?: any): GmAdventureMemory {
   if (Array.isArray(mem.lockedItems)) {
     for (const item of mem.lockedItems) {
       const cleaned = cleanMemoryItemText(String(item));
-      if (cleaned) lockedSet.add(cleaned);
+      if (cleaned && isMeaningfulMemoryItem(cleaned)) lockedSet.add(cleaned);
     }
   }
 
@@ -1775,10 +1823,10 @@ export function sanitizeAndMigrateGmMemory(mem?: any): GmAdventureMemory {
     const result: string[] = [];
     const seen = new Set<string>();
     for (const item of list) {
-      const raw = typeof item === 'string' ? item : (item?.name ? `${item.name}: ${item.state || item.desc || ''}` : String(item || ''));
+      const raw = typeof item === 'string' ? item : (item?.name ? `${item.name}: ${item.state || item.desc || ''}` : formatObjectToMemoryString(item));
       const isLegacyLocked = raw.includes('🔒');
       const cleaned = cleanMemoryItemText(raw);
-      if (cleaned && !seen.has(cleaned)) {
+      if (cleaned && isMeaningfulMemoryItem(cleaned) && !seen.has(cleaned)) {
         seen.add(cleaned);
         result.push(cleaned);
         if (isLegacyLocked) {
@@ -1940,6 +1988,44 @@ ${recentHistoryStr || '游戏刚开始。'}
       let s = jsonStr.trim();
       s = s.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
       s = s.replace(/,\s*([\]\}])/g, '$1');
+
+      // Auto-close open strings, arrays and objects if truncated
+      let openBraces = 0;
+      let openBrackets = 0;
+      let inString = false;
+      let escape = false;
+      for (let i = 0; i < s.length; i++) {
+        const char = s[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (char === '\\') {
+          escape = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (char === '{') openBraces++;
+          else if (char === '}') openBraces = Math.max(0, openBraces - 1);
+          else if (char === '[') openBrackets++;
+          else if (char === ']') openBrackets = Math.max(0, openBrackets - 1);
+        }
+      }
+      if (inString) s += '"';
+      s = s.replace(/,\s*$/, '');
+      while (openBrackets > 0) {
+        s += ']';
+        openBrackets--;
+      }
+      while (openBraces > 0) {
+        s += '}';
+        openBraces--;
+      }
+      s = s.replace(/,\s*([\]\}])/g, '$1');
       return s;
     };
 
@@ -1995,7 +2081,6 @@ ${recentHistoryStr || '游戏刚开始。'}
     };
 
     const extractFuzzyArray = (keyRegex: RegExp) => {
-      // Use a global version of the regex to find all matches, and pick the LAST one
       const flags = keyRegex.flags.includes('g') ? keyRegex.flags : `${keyRegex.flags}g`;
       const globalRegex = new RegExp(keyRegex.source, flags);
       const matches = [...stripped.matchAll(globalRegex)];
@@ -2008,7 +2093,10 @@ ${recentHistoryStr || '游戏刚开始。'}
       try {
         const testArr = JSON.parse(`[${innerStr}]`);
         if (Array.isArray(testArr) && testArr.length > 0) {
-          return testArr.map(String).map(cleanMemoryItemText).filter(s => s.trim().length > 0);
+          return testArr
+            .map(formatObjectToMemoryString)
+            .map(cleanMemoryItemText)
+            .filter(isMeaningfulMemoryItem);
         }
       } catch (e) {}
 
@@ -2019,13 +2107,13 @@ ${recentHistoryStr || '游戏刚开始。'}
       
       return items
         .map(s => cleanMemoryItemText(s.replace(/^[🔒\s\-*•、()（）\[\]【】]+/, '').replace(/^\d+[\.\s、\)\-—]+/, '').replace(/^"|"$|\[|\]/g, '').replace(/,$/, '').replace(/^"|"$|\[|\]/g, '').trim()))
-        .filter(s => s.length > 1 && !s.startsWith('{') && !s.startsWith('['));
+        .filter(isMeaningfulMemoryItem);
     };
 
-    resultObj.worldRules = extractFuzzyArray(/(?:"worldRules"|"world_rules"|"世界法则[^"]*")\s*:\s*\[([\s\S]*?)\]/i);
-    resultObj.characterStates = extractFuzzyArray(/(?:"characterStates"|"character_states"|"角色[^"]*")\s*:\s*\[([\s\S]*?)\]/i);
-    resultObj.activeQuests = extractFuzzyArray(/(?:"activeQuests"|"active_quests"|"主线[^"]*"|"任务[^"]*")\s*:\s*\[([\s\S]*?)\]/i);
-    resultObj.majorChronicles = extractFuzzyArray(/(?:"majorChronicles"|"major_chronicles"|"重大编年史[^"]*"|"编年史[^"]*")\s*:\s*\[([\s\S]*?)\]/i);
+    resultObj.worldRules = extractFuzzyArray(/(?:"worldRules"|"world_rules"|"rules"|"laws"|"世界法则[^"]*"|"法则[^"]*")\s*:\s*\[([\s\S]*?)\]/i);
+    resultObj.characterStates = extractFuzzyArray(/(?:"characterStates"|"character_states"|"characters"|"npcs"|"角色[^"]*"|"NPC[^"]*")\s*:\s*\[([\s\S]*?)\]/i);
+    resultObj.activeQuests = extractFuzzyArray(/(?:"activeQuests"|"active_quests"|"quests"|"tasks"|"pendingTasks"|"currentQuests"|"主线[^"]*"|"任务[^"]*"|"目标[^"]*")\s*:\s*\[([\s\S]*?)\]/i);
+    resultObj.majorChronicles = extractFuzzyArray(/(?:"majorChronicles"|"major_chronicles"|"chronicles"|"events"|"history"|"milestones"|"重大编年史[^"]*"|"编年史[^"]*"|"大事[^"]*")\s*:\s*\[([\s\S]*?)\]/i);
 
     if (Object.values(resultObj).some(arr => arr.length > 0)) {
       return resultObj;
@@ -2039,13 +2127,13 @@ ${recentHistoryStr || '游戏刚开始。'}
         const trimmed = line.trim();
         if (!trimmed || trimmed === '{' || trimmed === '}' || trimmed === '[' || trimmed === ']') continue;
 
-        if (/世界法则|worldRules|world_rules|铁律/i.test(trimmed)) {
+        if (/世界法则|worldRules|world_rules|铁律|rules|laws/i.test(trimmed)) {
           currentSection = 'worldRules';
-        } else if (/角色与NPC|角色状态|characterStates|character_states|NPC状态/i.test(trimmed)) {
+        } else if (/角色与NPC|角色状态|characterStates|character_states|NPC状态|characters|npcs/i.test(trimmed)) {
           currentSection = 'characterStates';
-        } else if (/主线|未决任务|activeQuests|active_quests|任务/i.test(trimmed)) {
+        } else if (/主线|未决任务|activeQuests|active_quests|任务|quests|tasks|pendingTasks/i.test(trimmed)) {
           currentSection = 'activeQuests';
-        } else if (/重大编年史|重大事件|majorChronicles|major_chronicles|编年史/i.test(trimmed)) {
+        } else if (/重大编年史|重大事件|majorChronicles|major_chronicles|编年史|chronicles|events|milestones|大事记/i.test(trimmed)) {
           currentSection = 'majorChronicles';
         } else if (currentSection) {
           let cleaned = cleanMemoryItemText(
@@ -2057,7 +2145,7 @@ ${recentHistoryStr || '游戏刚开始。'}
               .trim()
           );
 
-          if (cleaned.length > 1 && !cleaned.startsWith('{') && !cleaned.startsWith('}') && !cleaned.startsWith('[') && !cleaned.startsWith(']')) {
+          if (isMeaningfulMemoryItem(cleaned) && !cleaned.startsWith('{') && !cleaned.startsWith('}') && !cleaned.startsWith('[') && !cleaned.startsWith(']')) {
             resultObj[currentSection].push(cleaned);
           }
         }
@@ -2078,16 +2166,17 @@ ${recentHistoryStr || '游戏刚开始。'}
     for (const key of keys) {
       const val = parsed[key];
       if (Array.isArray(val) && val.length > 0) {
-        return val
-          .map((item: any) => typeof item === 'string' ? item : (item.name ? `${item.name}: ${item.state || item.desc || item.status || ''}` : JSON.stringify(item)))
+        const items = val
+          .map(formatObjectToMemoryString)
           .map((s: string) => cleanMemoryItemText(s.trim()))
-          .filter(Boolean);
+          .filter(isMeaningfulMemoryItem);
+        if (items.length > 0) return items;
       }
       if (typeof val === 'string' && val.trim().length > 0) {
         const splitLines = val.split('\n')
           .map(l => l.replace(/^[🔒\s\-*•、()（）\[\]【】]+/, '').replace(/^\d+[\.\s、\)\-—]+/, '').replace(/^"|"$/g, '').trim())
           .map(l => cleanMemoryItemText(l))
-          .filter(l => l.length > 1);
+          .filter(isMeaningfulMemoryItem);
         if (splitLines.length > 0) {
           return splitLines;
         }
@@ -2101,8 +2190,10 @@ ${recentHistoryStr || '游戏刚开始。'}
    * Guarantees that:
    * 1. Existing items written or saved by the player are NEVER arbitrarily deleted or cleared.
    * 2. Any item locked by the player is 100% immune to modification or deletion.
-   * 3. Character states evolve gracefully (e.g. updated status for [主角] or [NPC:Name] updates the unlocked state, while unmentioned NPCs remain safely in memory).
-   * 4. Quests and chronicles are cumulatively maintained instead of wiped clean.
+   * 3. Character states evolve gracefully without dropping unmentioned characters.
+   * 4. Quests are cumulatively advanced without wiping active pending tasks.
+   * 5. Chronicles are strictly append-only: historic facts are never erased.
+   * 6. Empty or placeholder responses from AI never wipe the existing memory.
    */
   const mergeAndPreserveLockedItems = (
     extractedItems: string[] | null,
@@ -2111,8 +2202,8 @@ ${recentHistoryStr || '游戏刚开始。'}
     maxCapacity: number = 15,
     categoryType: 'worldRules' | 'characterStates' | 'activeQuests' | 'majorChronicles' = 'activeQuests'
   ): string[] => {
-    const existing = (existingItems || []).map(cleanMemoryItemText).filter(Boolean);
-    const extracted = (extractedItems || []).map(cleanMemoryItemText).filter(Boolean);
+    const existing = (existingItems || []).map(cleanMemoryItemText).filter(isMeaningfulMemoryItem);
+    const extracted = (extractedItems || []).map(cleanMemoryItemText).filter(isMeaningfulMemoryItem);
 
     // Identify all locked items from existing memory in this category
     const lockedInCategory: string[] = [];
@@ -2126,8 +2217,8 @@ ${recentHistoryStr || '游戏刚开始。'}
       }
     }
 
-    // If AI extraction returned nothing or empty array for this category:
-    // Fall back to keeping ALL existing items (never wipe the user's memory!)
+    // Defensive fallback: If AI extraction returned nothing or only placeholders for this category:
+    // ALWAYS preserve ALL existing items! Never wipe memory!
     if (extracted.length === 0) {
       if (existing.length > 0) {
         return existing.slice(0, maxCapacity);
@@ -2150,9 +2241,9 @@ ${recentHistoryStr || '游戏刚开始。'}
 
     const getQuestKey = (str: string): string => {
       return str
-        .replace(/^\[(?:主线-进行中|支线-进行中|玩家动机|关键线索|任务)\]/g, '')
-        .replace(/^【(?:主线-进行中|支线-进行中|玩家动机|关键线索|任务)】/g, '')
+        .replace(/^[\[【][^\]】]+[\]】]/g, '')
         .replace(/^\d+[\.\s、\)\-—]+/, '')
+        .replace(/^[：:\-\s]+/, '')
         .replace(/\s+/g, '')
         .toLowerCase();
     };
@@ -2204,7 +2295,8 @@ ${recentHistoryStr || '游戏刚开始。'}
     } else if (categoryType === 'activeQuests') {
       const lockedQuestKeys = new Set<string>();
       for (const lockedItem of lockedInCategory) {
-        lockedQuestKeys.add(getQuestKey(lockedItem));
+        const qk = getQuestKey(lockedItem);
+        if (qk.length >= 2) lockedQuestKeys.add(qk);
       }
 
       const updatedQuestKeys = new Set<string>();
@@ -2212,12 +2304,12 @@ ${recentHistoryStr || '游戏刚开始。'}
         const norm = normalizeKey(extItem);
         if (seenNormalized.has(norm)) continue;
         const qKey = getQuestKey(extItem);
-        if (qKey && lockedQuestKeys.has(qKey)) {
+        if (qKey.length >= 2 && lockedQuestKeys.has(qKey)) {
           // Locked quest cannot be modified by AI
           continue;
         }
         seenNormalized.add(norm);
-        if (qKey) updatedQuestKeys.add(qKey);
+        if (qKey.length >= 2) updatedQuestKeys.add(qKey);
         mergedList.push(extItem);
       }
 
@@ -2226,7 +2318,7 @@ ${recentHistoryStr || '游戏刚开始。'}
         const norm = normalizeKey(existItem);
         if (seenNormalized.has(norm)) continue;
         const qKey = getQuestKey(existItem);
-        if (qKey && updatedQuestKeys.has(qKey)) {
+        if (qKey.length >= 2 && updatedQuestKeys.has(qKey)) {
           // Already updated with newer stage from extracted
           continue;
         }
@@ -2251,8 +2343,8 @@ ${recentHistoryStr || '游戏刚开始。'}
         }
       }
     } else {
-      // majorChronicles: Cumulative history
-      // Add existing unlocked history first (preserve chronological order)
+      // majorChronicles: Strictly Append-Only Cumulative History
+      // 1. Existing history is fully preserved first in chronological order
       for (const existItem of unlockedExisting) {
         const norm = normalizeKey(existItem);
         if (!seenNormalized.has(norm)) {
@@ -2260,7 +2352,7 @@ ${recentHistoryStr || '游戏刚开始。'}
           mergedList.push(existItem);
         }
       }
-      // Append newly extracted chronicles
+      // 2. Newly extracted chronicles are appended to history
       for (const extItem of extracted) {
         const norm = normalizeKey(extItem);
         if (!seenNormalized.has(norm)) {
@@ -2268,6 +2360,11 @@ ${recentHistoryStr || '游戏刚开始。'}
           mergedList.push(extItem);
         }
       }
+    }
+
+    // Double defense: If mergedList somehow became empty, fallback to existing or default
+    if (mergedList.length === 0) {
+      return existing.length > 0 ? existing.slice(0, maxCapacity) : defaultFallback;
     }
 
     // Capacity bound: If exceeding maxCapacity, prune oldest UNLOCKED items first
@@ -2283,30 +2380,35 @@ ${recentHistoryStr || '游戏刚开始。'}
         }
       }
       const allowedPrunedCount = Math.max(0, maxCapacity - mustKeep.length);
-      // Keep newest entries from canPrune
-      const keptPruned = canPrune.slice(-allowedPrunedCount);
+      const keptPruned = allowedPrunedCount > 0 ? canPrune.slice(-allowedPrunedCount) : [];
       return [...mustKeep, ...keptPruned];
     }
 
-    return mergedList.length > 0 ? mergedList : defaultFallback;
+    return mergedList;
   };
 
   const mergeResult = (parsed: any) => {
     const extractedWorldRules = getArrayFromParsed(parsed, [
       'worldRules', 'world_rules', 'worldrules', 'world_rule',
-      '世界法则与铁律', '世界法则', '法则与铁律', '法则'
+      'rules', 'rule', 'world_laws', 'laws',
+      '世界法则与铁律', '世界法则', '法则与铁律', '法则', '铁律', '世界规则', '世界观设定'
     ]);
     const extractedCharStates = getArrayFromParsed(parsed, [
       'characterStates', 'character_states', 'characterstates', 'character_state',
-      'characterState', 'characters', '角色与NPC状态', '角色状态', 'NPC状态', '角色与NPC实时状态'
+      'characterState', 'characters', 'character', 'npcs', 'npc',
+      '角色与NPC状态', '角色状态', 'NPC状态', '角色与NPC实时状态', '角色与NPC', '登场角色'
     ]);
     const extractedQuests = getArrayFromParsed(parsed, [
       'activeQuests', 'active_quests', 'activequests', 'active_quest',
-      '主线与未决任务', '未决任务', '任务', '主线任务'
+      'quests', 'quest', 'tasks', 'task', 'pendingTasks', 'pending_tasks',
+      'currentQuests', 'current_quests', 'mainQuests', 'missions', 'goals',
+      '主线与未决任务', '主线与任务', '未决任务', '进行中任务', '任务列表', '任务', '主线任务', '当前任务', '目标'
     ]);
     const extractedChronicles = getArrayFromParsed(parsed, [
       'majorChronicles', 'major_chronicles', 'majorchronicles', 'major_chronicle',
-      '重大编年史', '编年史', '大事记', '已发生大事件'
+      'chronicles', 'chronicle', 'majorEvents', 'major_events', 'events', 'event',
+      'history', 'timeline', 'milestones', 'milestone', 'historicalEvents',
+      '重大编年史', '编年史', '大事记', '已发生大事件', '历史大事件', '重大事件', '历史事件', '里程碑', '大事'
     ]);
 
     // Check if everything fell back and existing memory is also empty
@@ -2348,7 +2450,7 @@ ${recentHistoryStr || '游戏刚开始。'}
       extractedChronicles,
       sanitizedExisting.majorChronicles,
       ['[大事件] 序章：冒险由此开启'],
-      15,
+      20,
       'majorChronicles'
     );
 

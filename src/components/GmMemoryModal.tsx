@@ -19,7 +19,7 @@ import {
   Unlock
 } from 'lucide-react';
 import { GmAdventureMemory } from '../lib/types';
-import { cleanMemoryItemText, sanitizeAndMigrateGmMemory } from '../lib/api';
+import { cleanMemoryItemText, sanitizeAndMigrateGmMemory, isMeaningfulMemoryItem } from '../lib/api';
 
 interface GmMemoryModalProps {
   isOpen: boolean;
@@ -108,7 +108,7 @@ export default function GmMemoryModal({
 
   const handleAddItem = () => {
     const text = cleanMemoryItemText(newItemText);
-    if (!text) return;
+    if (!text || !isMeaningfulMemoryItem(text)) return;
     // Add item and immediately persist so user never loses their newly written entry
     const updated = sanitizeAndMigrateGmMemory({
       ...localMemory,
@@ -147,7 +147,7 @@ export default function GmMemoryModal({
   const handleSaveEdit = (index: number) => {
     const oldText = cleanMemoryItemText(currentList[index]);
     const newText = cleanMemoryItemText(editingText);
-    if (!newText) return;
+    if (!newText || !isMeaningfulMemoryItem(newText)) return;
 
     const isOldLocked = (localMemory.lockedItems || []).includes(oldText);
     let updatedLocked = [...(localMemory.lockedItems || [])];
